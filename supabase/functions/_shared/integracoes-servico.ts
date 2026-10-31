@@ -619,7 +619,20 @@ async function whatsappConcluir(deps: Dependencias, req: Request): Promise<Respo
     p_responsavel: responsavel,
     p_modo: modo,
   })
-  if (error || typeof numeroId !== 'string') return erroDoBanco(error)
+  if (error || typeof numeroId !== 'string') {
+    // O banco recusou (limite, número de outra empresa…) depois da inscrição acima. A inscrição
+    // NÃO é retirada na Meta (poderia cortar outro número da mesma conta): se a conta não tem
+    // número ativo, o banco registra a limpeza pendente na auditoria.
+    await deps.admin.rpc('whatsapp_inscricao_pendencia', { p_tenant: ctx.tenantId, p_numero: null, p_waba_id: waba, p_origem: 'cadastro_recusado' })
+    return erroDoBanco(error)
+  }
+  // Inscrição idempotente depois de salvar: garante a conta inscrita mesmo se algo a retirou
+  // entre a primeira inscrição e o salvamento. Falha aqui não desfaz nada (a primeira foi aceita).
+  try {
+    await inscreverApp(deps.buscar, deps.meta, token, waba)
+  } catch {
+    /* a inscrição anterior já foi confirmada pela Meta */
+  }
   const base = { ok: true, numero: numeroId, numeroExibicao: numero.numeroExibicao, nomeVerificado: numero.nomeVerificado, modo }
   // Coexistência: a Meta não pede registro (o número já está no app WhatsApp Business).
   // Pede logo a sincronização (contatos e histórico): a Meta só aceita nas 24 h após a conexão, uma vez por tipo.

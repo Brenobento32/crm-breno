@@ -228,7 +228,14 @@ describe('conexão do número (servidor)', () => {
     const corpo = await r.json()
     expect(r.status).toBe(200)
     expect(corpo).toMatchObject({ ok: true, numero: NUMERO, situacao: 'conectado', modo: 'cloud_api' })
-    expect(externas.map((e) => new URL(e.url).pathname)).toEqual(['/v23.0/oauth/access_token', `/v23.0/${WABA}/phone_numbers`, `/v23.0/${WABA}/subscribed_apps`, `/v23.0/${PHONE}/register`])
+    // Inscrição antes de salvar e, de novo (idempotente), depois de salvar.
+    expect(externas.map((e) => new URL(e.url).pathname)).toEqual([
+      '/v23.0/oauth/access_token',
+      `/v23.0/${WABA}/phone_numbers`,
+      `/v23.0/${WABA}/subscribed_apps`,
+      `/v23.0/${WABA}/subscribed_apps`,
+      `/v23.0/${PHONE}/register`,
+    ])
     expect(chamadasAdmin.find((c) => c.nome === 'whatsapp_salvar_numero')?.args).toMatchObject({ p_modo: 'cloud_api', p_phone_number_id: PHONE })
     expect(chamadasAdmin.find((c) => c.nome === 'whatsapp_registro_resultado')?.args).toEqual({ p_numero: NUMERO, p_ok: true, p_erro: null, p_codigo: null })
     // O pedido é contado ANTES de chamar a Meta (limite de 10 por número em 72 h).

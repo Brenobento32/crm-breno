@@ -98,6 +98,20 @@ cartão do funil; lista completa na ficha do lead.
     só registra (e avisa no painel quando a Meta informou desconexão do app).
   - Conta pelo `waba_id` do banco; `PARTNER_*` usa `waba_info.waba_id`, nunca o `entry.id`.
   - Avisos registrados em `whatsapp_eventos_conta` (só servidor).
+- **Inscrição do app na WABA** (pacote 5, migration `20261106090000`):
+  - o AVANTE **nunca** retira a inscrição na Meta (`DELETE /<WABA>/subscribed_apps`): retirar
+    poderia cortar as notificações de outro número legítimo da mesma conta, de qualquer
+    empresa, numa corrida com uma conexão em andamento;
+  - cadastro aceito: inscreve antes de salvar e de novo, idempotente, depois de salvar;
+  - cadastro recusado pelo banco ou "Desconectar" do último número ativo da conta: o banco
+    registra `whatsapp_inscricao_limpeza_pendente` na auditoria da empresa (sem token).
+    "Em uso" = qualquer número não desconectado da WABA, com ou sem token, pendente de
+    registro incluído, em qualquer empresa. Limpeza na Meta só manual, conferindo de novo;
+  - "Desconectar" continua só no banco (`whatsapp_acao`): revoga a credencial e o vínculo,
+    audita e mantém conversas e mensagens;
+  - webhook de número desconectado é ignorado por inteiro: mensagens, ecos, histórico e
+    contatos (já eram) e agora também status e andamento do histórico. Status atrasado de
+    mensagem enviada antes da desconexão não é gravado (a cobrança continua visível na Meta).
 - **Sem WhatsApp Web, Baileys ou QR não oficial.** A demonstração local de
   espelhamento foi retirada do produto (servidor, telas e migration); o desenho
   ficou só como registro em `supabase/propostas/referencia_demo_whatsapp_qr_local.sql`
@@ -129,5 +143,6 @@ cartão do funil; lista completa na ficha do lead.
    os padrões aprovados dos planos (tabela acima) (recusa se alguma empresa com
    integração em uso perderia a permissão); deploy da `integracoes`; ZIP 3.
 4. Pacote 4 — `account_update` + parâmetros v4 dos dois cartões: migration `20261105090000`, deploy da `integracoes`, ZIP 4.
-5. Meta: assinar os campos de webhook (`messages`, `smb_message_echoes`, `history`,
+5. Pacote 5 — inscrição na WABA: migration `20261106090000` + deploy da `integracoes` + ZIP 5.
+6. Meta: assinar os campos de webhook (`messages`, `smb_message_echoes`, `history`,
    `smb_app_state_sync`, `account_update`) e homologar.
