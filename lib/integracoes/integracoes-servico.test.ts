@@ -107,6 +107,91 @@ describe('webhook do WhatsApp', () => {
   })
 })
 
+describe('webhook do WhatsApp — account_update (coexistência e desvinculação)', () => {
+  const aviso = (value: object, entryId = '2949482758682047') =>
+    JSON.stringify({ object: 'whatsapp_business_account', entry: [{ id: entryId, time: 1, changes: [{ field: 'account_update', value }] }] })
+  const enviar = (deps: Dependencias, corpo: string) =>
+    tratarIntegracoes(new Request(`${BASE}/whatsapp/webhook`, { method: 'POST', headers: { 'x-hub-signature-256': assinar(corpo) }, body: corpo }), deps)
+  const dois: Rpcs = {
+    whatsapp_numeros_da_waba: () => ({ data: [{ numero_id: 'n1', modo: 'coexistencia', token: 'tok-1' }, { numero_id: 'n2', modo: 'cloud_api', token: 'tok-2' }], error: null }),
+  }
+
+  it('ACCOUNT_OFFBOARDED / RECONNECTED: o banco pausa/retoma pela conta (entry.id); nenhuma chamada à Meta', async () => {
+    for (const evento of ['ACCOUNT_OFFBOARDED', 'ACCOUNT_RECONNECTED']) {
+      const { deps, chamadasAdmin, externas } = montar()
+      const r = await enviar(deps, aviso({ event: evento }, '102290129340398'))
+      expect(r.status).toBe(200)
+      expect(chamadasAdmin).toEqual([{ nome: 'whatsapp_coexistencia_evento', args: { p_waba_id: '102290129340398', p_evento: evento } }])
+      expect(externas).toHaveLength(0)
+    }
+  })
+
+  it('PARTNER_REMOVED: usa waba_info.waba_id (nunca o entry.id do parceiro) e só desconecta o número cujo acesso a Meta negou', async () => {
+    const { deps, chamadasAdmin, externas } = montar({
+      admin: dois,
+      buscar: (_url, init) => {
+        const tok = String((init?.headers as Record<string, string>).Authorization)
+        return tok === 'Bearer tok-1'
+          ? new Response(JSON.stringify({ error: { code: 200, message: 'Permissions error' } }), { status: 403 })
+          : new Response(JSON.stringify({ id: '495709166956424' }))
+      },
+    })
+    const r = await enviar(
+      deps,
+      aviso({ event: 'PARTNER_REMOVED', waba_info: { waba_id: '495709166956424', owner_business_id: '1' }, disconnection_info: { reason: 'ACCOUNT_DISCONNECTED', initiated_by: 'USER' } }),
+    )
+    expect(r.status).toBe(200)
+    expect(externas).toEqual(['https://meta.falsa/v23.0/495709166956424?fields=id', 'https://meta.falsa/v23.0/495709166956424?fields=id'])
+    expect(chamadasAdmin.map((c) => c.nome)).toEqual(['whatsapp_numeros_da_waba', 'whatsapp_desvincular_numero', 'whatsapp_registrar_evento_conta'])
+    expect(chamadasAdmin[0].args).toEqual({ p_waba_id: '495709166956424' })
+    expect(chamadasAdmin[1].args).toMatchObject({ p_numero: 'n1', p_motivo: expect.stringMatching(/desvinculou o AVANTE.*desconectada no app.*conecte o número de novo/) })
+    expect(chamadasAdmin[2].args).toEqual({
+      p_waba_id: '495709166956424', p_evento: 'PARTNER_REMOVED', p_motivo: 'ACCOUNT_DISCONNECTED', p_iniciado_por: 'USER', p_resultado: 'desconectado', p_numeros: 1,
+    })
+    expect(JSON.stringify(chamadasAdmin)).not.toContain('tok-')
+  })
+
+  it('acesso mantido (outro parceiro saiu): nada é desconectado; com motivo de app, só avisa o número em coexistência', async () => {
+    const { deps, chamadasAdmin } = montar({ admin: dois, buscar: () => new Response(JSON.stringify({ id: '495709166956424' })) })
+    const r = await enviar(deps, aviso({ event: 'PARTNER_REMOVED', waba_info: { waba_id: '495709166956424' }, disconnection_info: { reason: 'PRIMARY_INACTIVITY', initiated_by: 'SYSTEM' } }))
+    expect(r.status).toBe(200)
+    expect(chamadasAdmin.map((c) => c.nome)).toEqual(['whatsapp_numeros_da_waba', 'whatsapp_avisar_numero', 'whatsapp_registrar_evento_conta'])
+    expect(chamadasAdmin[1].args).toMatchObject({ p_numero: 'n1', p_aviso: expect.stringMatching(/muito tempo sem uso no celular/) })
+    expect(chamadasAdmin[2].args).toMatchObject({ p_resultado: 'acesso_mantido', p_numeros: 2 })
+  })
+
+  it('Meta fora do ar ou limite de chamadas: nada desconecta e devolve 500 (a Meta reenvia o aviso)', async () => {
+    for (const resposta of [() => new Response('{}', { status: 500 }), () => new Response(JSON.stringify({ error: { code: 4, message: 'limite' } }), { status: 400 })]) {
+      const { deps, chamadasAdmin } = montar({ admin: dois, buscar: resposta })
+      const r = await enviar(deps, aviso({ event: 'ACCOUNT_DELETED' }, '495709166956424'))
+      expect(r.status).toBe(500)
+      expect(chamadasAdmin.map((c) => c.nome)).toEqual(['whatsapp_numeros_da_waba'])
+    }
+  })
+
+  it('PARTNER_APP_UNINSTALLED de outro app é ignorado; do AVANTE, confere o acesso', async () => {
+    const outro = montar({ admin: dois })
+    await enviar(outro.deps, aviso({ event: 'PARTNER_APP_UNINSTALLED', waba_info: { waba_id: '495709166956424', partner_app_id: 'outro-app' } }))
+    expect(outro.chamadasAdmin).toHaveLength(0)
+    const nosso = montar({ admin: dois, buscar: () => new Response(JSON.stringify({ error: { code: 190, message: 'token' } }), { status: 401 }) })
+    const r = await enviar(nosso.deps, aviso({ event: 'PARTNER_APP_UNINSTALLED', waba_info: { waba_id: '495709166956424', partner_app_id: 'app' } }))
+    expect(r.status).toBe(200)
+    expect(nosso.chamadasAdmin.filter((c) => c.nome === 'whatsapp_desvincular_numero').map((c) => c.args?.p_numero)).toEqual(['n1', 'n2'])
+    expect(String(nosso.chamadasAdmin[1].args?.p_motivo)).toMatch(/removeu as permissões do AVANTE/)
+  })
+
+  it('evento de conta sem efeito no número (ex.: preço) ou sem waba_info: nada muda; conta sem número: só registra', async () => {
+    const { deps, chamadasAdmin } = montar()
+    await enviar(deps, aviso({ event: 'VOLUME_BASED_PRICING_TIER_UPDATE' }, '495709166956424'))
+    await enviar(deps, aviso({ event: 'PARTNER_REMOVED' }))
+    expect(chamadasAdmin).toHaveLength(0)
+    const vazio = montar({ admin: { whatsapp_numeros_da_waba: () => ({ data: [], error: null }) } })
+    await enviar(vazio.deps, aviso({ event: 'PARTNER_REMOVED', waba_info: { waba_id: '495709166956424' } }))
+    expect(vazio.chamadasAdmin.at(-1)?.args).toMatchObject({ p_resultado: 'sem_numero', p_numeros: 0 })
+    expect(vazio.externas).toHaveLength(0)
+  })
+})
+
 describe('envio do WhatsApp (controle de custo)', () => {
   it('banco bloqueia (fora da janela gratuita, cobrança, limite): nenhuma chamada à Meta', async () => {
     for (const [bloqueio, status] of [

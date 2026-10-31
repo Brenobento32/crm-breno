@@ -221,6 +221,32 @@ export function resultadoDoCadastro(e: EstadoCadastro, encerrado: boolean): Resu
   return encerrado ? { tipo: 'cancelado', etapa: null } : null
 }
 
+/**
+ * Parâmetros da janela do cadastro incorporado (v4), como nos exemplos oficiais
+ * (`setup: {}`). Pela tabela de versões da Meta, a v4 manda os eventos da janela
+ * (FINISH… com `waba_id` e `phone_number_id`) em todos os fluxos; `sessionInfoVersion`
+ * só era obrigatório na v2. Fica `'3'` nos dois modos por ser o valor do exemplo oficial
+ * de coexistência e o que o verificador da Meta reconhece.
+ * `version: 'v4'` fixa a versão, como nos parâmetros que o configurador da Meta gera:
+ * a v5 (out/2026) tem outro formato (coexistência ligada por padrão, sem `featureType`
+ * nem `sessionInfoVersion`) e só deve entrar com mudança e teste próprios.
+ * Coexistência (app WhatsApp Business + Cloud API): `featureType` faz a Meta mostrar a
+ * opção de conectar o número do app; número novo continua possível na mesma janela.
+ * Conferido no verificador da Meta (31/10/2026) contra a configuração 2263375681228010:
+ * v4, cloud_api, sessão 3; coexistência "Ativado" só no cartão B.
+ */
+export type ExtrasCadastro = {
+  setup: Record<string, never>
+  version: 'v4'
+  sessionInfoVersion: '3'
+  featureType?: 'whatsapp_business_app_onboarding'
+}
+export function extrasDoCadastro(coexistencia: boolean): ExtrasCadastro {
+  return coexistencia
+    ? { setup: {}, version: 'v4', featureType: 'whatsapp_business_app_onboarding', sessionInfoVersion: '3' }
+    : { setup: {}, version: 'v4', sessionInfoVersion: '3' }
+}
+
 const VERSAO_SDK_PADRAO = 'v23.0'
 const ORIGENS_META = new Set(['https://www.facebook.com', 'https://web.facebook.com', 'https://business.facebook.com'])
 
@@ -253,9 +279,7 @@ export async function cadastrarWhatsappNaMeta(cfg: ConfigMeta, opcoes: { coexist
         config_id: cfg.configId,
         response_type: 'code',
         override_default_response_type: true,
-        // Coexistência (app WhatsApp Business + Cloud API): a Meta mostra a opção de conectar o número do app;
-        // número novo continua possível na mesma janela. Sem a opção, o fluxo é o padrão (Cloud API).
-        extras: opcoes.coexistencia ? { featureType: 'whatsapp_business_app_onboarding', sessionInfoVersion: '3' } : {},
+        extras: extrasDoCadastro(Boolean(opcoes.coexistencia)),
       }),
     )
   }

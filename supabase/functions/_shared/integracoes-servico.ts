@@ -44,10 +44,15 @@ import { assinaturaMetaValida, respostaVerificacao } from './meta.ts'
 import { enviarEvento, idExternoDaEmpresa, lerInstalacao, nomeDoDataset, tokenDeSistema, type EventoFila } from './meta-conversoes.ts'
 import {
   ErroMeta,
+  acessoAContaWhatsapp,
   conferirNumero,
   enviarTexto,
   extrairEventosCoexistencia,
+  extrairEventosConta,
   extrairEventosWhatsapp,
+  textoAvisoDesconexaoApp,
+  textoDesvinculo,
+  type EventoConta,
   inscreverApp,
   pedirSincronizacaoApp,
   PIN_VALIDO,
@@ -774,10 +779,82 @@ async function whatsappWebhook(deps: Dependencias, req: Request, url: URL): Prom
     const { error } = await deps.admin.rpc('whatsapp_registrar_contatos_app', { p_phone_number_id: c.phoneNumberId, p_itens: c.itens })
     if (error) falhou = true
   }
-  // 500 faz a Meta reenviar; a gravação é idempotente pelo ID da mensagem.
+  // account_update: coexistência desligada/reconectada e desvinculação da conta.
+  const contas = extrairEventosConta(corpo, deps.meta.appId || null)
+  if (!(await tratarEventosConta(deps, contas))) falhou = true
+  // 500 faz a Meta reenviar; a gravação é idempotente pelo ID da mensagem (e o aviso de conta, pelo estado do número).
   return falhou
     ? erro(500, 'reenviar', 'Falha temporária.')
-    : json(200, { ok: true, mensagens: mensagens.length, status: status.length, ecos: coex.ecos.length, historico: coex.historico.length, contatos: coex.contatos.length })
+    : json(200, {
+        ok: true,
+        mensagens: mensagens.length,
+        status: status.length,
+        ecos: coex.ecos.length,
+        historico: coex.historico.length,
+        contatos: coex.contatos.length,
+        contas: contas.length,
+      })
+}
+
+/**
+ * Avisos de conta. Coexistência: o banco pausa/retoma. Desvinculação: o aviso
+ * não diz com certeza qual parceiro saiu, então cada número só é desconectado
+ * quando a Meta confirma, com o token dele, que o acesso acabou. Devolve false
+ * se algo precisa ser reprocessado (a Meta reenvia o aviso).
+ */
+async function tratarEventosConta(deps: Dependencias, eventos: EventoConta[]): Promise<boolean> {
+  let ok = true
+  for (const ev of eventos) {
+    if (ev.tipo === 'coexistencia') {
+      const { error } = await deps.admin.rpc('whatsapp_coexistencia_evento', { p_waba_id: ev.wabaId, p_evento: ev.evento })
+      if (error) ok = false
+      continue
+    }
+    const { data, error } = await deps.admin.rpc('whatsapp_numeros_da_waba', { p_waba_id: ev.wabaId })
+    if (error) {
+      ok = false
+      continue
+    }
+    const alvos = (data as { numero_id: string; modo: string; token: string }[] | null) ?? []
+    let desconectados = 0
+    let mantidos = 0
+    let pendente = false
+    for (const a of alvos) {
+      let acesso: boolean
+      try {
+        acesso = await acessoAContaWhatsapp(deps.buscar, deps.meta!, a.token, ev.wabaId)
+      } catch {
+        pendente = true // rede/limite/erro da Meta: nada muda agora; a Meta reenvia
+        continue
+      }
+      if (acesso) {
+        mantidos++
+        if (ev.motivo && a.modo === 'coexistencia') {
+          const { error: e } = await deps.admin.rpc('whatsapp_avisar_numero', { p_numero: a.numero_id, p_aviso: textoAvisoDesconexaoApp(ev.motivo) })
+          if (e) pendente = true
+        }
+        continue
+      }
+      const { error: e } = await deps.admin.rpc('whatsapp_desvincular_numero', { p_numero: a.numero_id, p_motivo: textoDesvinculo(ev.evento, ev.motivo) })
+      if (e) pendente = true
+      else desconectados++
+    }
+    if (pendente) {
+      ok = false
+      continue
+    }
+    const resultado = alvos.length === 0 ? 'sem_numero' : desconectados > 0 ? 'desconectado' : 'acesso_mantido'
+    const { error: e } = await deps.admin.rpc('whatsapp_registrar_evento_conta', {
+      p_waba_id: ev.wabaId,
+      p_evento: ev.evento,
+      p_motivo: ev.motivo,
+      p_iniciado_por: ev.iniciadoPor,
+      p_resultado: resultado,
+      p_numeros: desconectados || mantidos,
+    })
+    if (e) ok = false
+  }
+  return ok
 }
 
 async function whatsappEnviar(deps: Dependencias, req: Request): Promise<Response> {

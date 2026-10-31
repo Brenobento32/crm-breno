@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { tratarIntegracoes, type Dependencias, type ErroBanco } from '../../supabase/functions/_shared/integracoes-servico.ts'
 import { ErroMeta, mensagemDeRegistro, registrarNumero } from '../../supabase/functions/_shared/whatsapp-cloud.ts'
 
-import { aplicarEvento, lerEventoCadastro, resultadoDoCadastro, type EstadoCadastro } from './janelas-provedores'
+import { aplicarEvento, extrasDoCadastro, lerEventoCadastro, resultadoDoCadastro, type EstadoCadastro } from './janelas-provedores'
 
 /**
  * Conexão oficial do WhatsApp: Embedded Signup v4 → registro do número com
@@ -428,5 +428,23 @@ describe('configuração pública da janela', () => {
     expect(await (await tratarIntegracoes(post('/whatsapp/config', {}), lig.deps)).json()).toMatchObject({ disponivel: true, versaoGraph: 'v23.0' })
     const des = montar({ usuario: { integracoes_habilitadas: () => ({ data: [{ whatsapp_oficial: false }], error: null }) } })
     expect(await (await tratarIntegracoes(post('/whatsapp/config', {}), des.deps)).json()).toMatchObject({ disponivel: false, versaoGraph: null, appId: null })
+  })
+})
+
+describe('parâmetros da janela da Meta (Embedded Signup v4)', () => {
+  it('API Oficial: v4 fixa, sem coexistência', () => {
+    const e = extrasDoCadastro(false)
+    expect(e).toEqual({ setup: {}, version: 'v4', sessionInfoVersion: '3' })
+    expect(e).not.toHaveProperty('featureType')
+  })
+  it('Aplicativo existente: pede o fluxo de coexistência da v4', () => {
+    expect(extrasDoCadastro(true)).toEqual({ setup: {}, version: 'v4', featureType: 'whatsapp_business_app_onboarding', sessionInfoVersion: '3' })
+  })
+  it('lê os IDs dos dois modos e não aceita o fluxo sem número', () => {
+    const ev = (event: string, data: object) => lerEventoCadastro({ type: 'WA_EMBEDDED_SIGNUP', event, data })
+    expect(ev('FINISH', { waba_id: '123456', phone_number_id: '654321' })).toEqual({ tipo: 'ids', wabaId: '123456', phoneNumberId: '654321', modo: 'cloud_api' })
+    expect(ev('FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING', { waba_id: '123456', phone_number_id: '654321' })).toMatchObject({ modo: 'coexistencia' })
+    expect(ev('FINISH_ONLY_WABA', { waba_id: '123456' })).toEqual({ tipo: 'final', resultado: { tipo: 'sem_numero' } })
+    expect(ev('FINISH_GRANT_ONLY_API_ACCESS', {})).toEqual({ tipo: 'final', resultado: { tipo: 'nao_suportado' } })
   })
 })

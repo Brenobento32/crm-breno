@@ -341,6 +341,107 @@ export function extrairEventosCoexistencia(corpo: unknown): EventosCoexistencia 
   return saida
 }
 
+// ---------------------------------------------------------------------------
+// account_update: avisos da Meta sobre a CONTA (coexistência e desvinculação).
+// ---------------------------------------------------------------------------
+export type EventoConta =
+  | { tipo: 'coexistencia'; evento: 'ACCOUNT_OFFBOARDED' | 'ACCOUNT_RECONNECTED'; wabaId: string }
+  | {
+      tipo: 'desvinculo'
+      evento: 'PARTNER_REMOVED' | 'PARTNER_APP_UNINSTALLED' | 'ACCOUNT_DELETED'
+      wabaId: string
+      motivo: string | null
+      iniciadoPor: string | null
+    }
+
+const ID_META = /^[0-9]{5,30}$/
+const codigoMeta = (v: unknown, max: number) => {
+  const t = texto(v)?.toUpperCase().replace(/[^A-Z0-9_]/g, '').slice(0, max)
+  return t ? t : null
+}
+
+/**
+ * Avisos `account_update` que mudam o estado de um número no AVANTE. Os demais
+ * eventos desse campo (limites, verificação, preço…) são ignorados.
+ * - PARTNER_*: a conta vem de `waba_info.waba_id` (o `entry.id` desses avisos é
+ *   o do parceiro, não o da conta) — nunca do `entry.id`.
+ * - ACCOUNT_*: a Meta manda só o evento; a conta é o `entry.id`.
+ * - PARTNER_APP_UNINSTALLED de OUTRO app (outro parceiro na mesma conta) é ignorado.
+ */
+export function extrairEventosConta(corpo: unknown, appId: string | null): EventoConta[] {
+  const saida: EventoConta[] = []
+  const raiz = obj(corpo)
+  if (raiz?.object !== 'whatsapp_business_account') return saida
+  for (const entrada of lista(raiz.entry)) {
+    const e = obj(entrada)
+    for (const mudanca of lista(e?.changes)) {
+      const m = obj(mudanca)
+      const valor = obj(m?.value)
+      if (m?.field !== 'account_update' || !valor) continue
+      const evento = texto(valor.event)
+      const info = obj(valor.waba_info)
+      if (evento === 'ACCOUNT_OFFBOARDED' || evento === 'ACCOUNT_RECONNECTED') {
+        const wabaId = texto(info?.waba_id) ?? texto(e?.id)
+        if (wabaId && ID_META.test(wabaId)) saida.push({ tipo: 'coexistencia', evento, wabaId })
+      } else if (evento === 'PARTNER_REMOVED' || evento === 'PARTNER_APP_UNINSTALLED' || evento === 'ACCOUNT_DELETED') {
+        const wabaId = evento === 'ACCOUNT_DELETED' ? (texto(info?.waba_id) ?? texto(e?.id)) : texto(info?.waba_id)
+        if (!wabaId || !ID_META.test(wabaId)) continue
+        if (evento === 'PARTNER_APP_UNINSTALLED') {
+          const app = texto(info?.partner_app_id)
+          if (app && appId && app !== appId) continue
+        }
+        const desc = obj(valor.disconnection_info)
+        saida.push({ tipo: 'desvinculo', evento, wabaId, motivo: codigoMeta(desc?.reason, 80), iniciadoPor: codigoMeta(desc?.initiated_by, 40) })
+      }
+    }
+  }
+  return saida
+}
+
+/** Códigos da Graph API que significam "este token não acessa mais esta conta". */
+const ACESSO_PERDIDO = new Set(['190', '200', '10', '100'])
+
+/**
+ * Confere na Meta se o token do número ainda acessa a conta. `true`/`false`
+ * só quando a Meta responde com certeza; rede, limite de chamadas ou erro da
+ * Meta lançam `ErroMeta` (o aviso é reprocessado depois, nada é desconectado).
+ */
+export async function acessoAContaWhatsapp(buscar: Busca, cfg: Pick<ConfigMeta, 'graphUrl'>, token: string, wabaId: string): Promise<boolean> {
+  try {
+    await chamarGraph(buscar, `${cfg.graphUrl}/${encodeURIComponent(wabaId)}?fields=id`, { headers: { Authorization: `Bearer ${token}` } })
+    return true
+  } catch (e) {
+    if (e instanceof ErroMeta && ACESSO_PERDIDO.has(e.codigo)) return false
+    throw e
+  }
+}
+
+const MOTIVOS_APP: Record<string, string> = {
+  ACCOUNT_DISCONNECTED: 'a conta foi desconectada no app',
+  PRIMARY_INACTIVITY: 'o app ficou muito tempo sem uso no celular',
+  COMPANION_INACTIVITY: 'a API ficou muito tempo sem uso',
+  BUSINESS_DOWNGRADE: 'o número deixou de usar o app WhatsApp Business',
+  CHANGE_NUMBER: 'o número foi trocado no app',
+  USER_RE_REGISTERED: 'o número foi registrado de novo no app',
+}
+
+/** Texto para o painel quando a Meta confirma que o acesso acabou. */
+export function textoDesvinculo(evento: 'PARTNER_REMOVED' | 'PARTNER_APP_UNINSTALLED' | 'ACCOUNT_DELETED', motivo: string | null): string {
+  const causa =
+    evento === 'ACCOUNT_DELETED'
+      ? 'A Meta informou que a conta do WhatsApp foi excluída'
+      : evento === 'PARTNER_APP_UNINSTALLED'
+        ? 'A empresa removeu as permissões do AVANTE na Meta'
+        : 'A empresa desvinculou o AVANTE desta conta do WhatsApp'
+  const detalhe = motivo && MOTIVOS_APP[motivo] ? ` (${MOTIVOS_APP[motivo]})` : ''
+  return `${causa}${detalhe}. Nada foi apagado; para voltar a usar, conecte o número de novo.`
+}
+
+/** Aviso quando a Meta informa desconexão do app, mas o acesso à conta continua. */
+export function textoAvisoDesconexaoApp(motivo: string): string {
+  return `A Meta informou que o app WhatsApp Business se desconectou da API${MOTIVOS_APP[motivo] ? ` (${MOTIVOS_APP[motivo]})` : ''}. Confira no celular e, se preciso, conecte o número de novo.`
+}
+
 /** Número de telefone para a API (só dígitos, com DDI). */
 export function telefoneParaApi(telefone: string): string | null {
   const d = (telefone ?? '').replace(/\D/g, '')

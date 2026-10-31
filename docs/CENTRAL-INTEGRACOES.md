@@ -77,8 +77,9 @@ cartão do funil; lista completa na ficha do lead.
 ## WhatsApp — dois cartões, uma integração oficial
 
 - **A — API Oficial:** número novo pela Cloud API (registro com PIN).
-- **B — Conectar aplicativo existente:** coexistência oficial (Embedded Signup
-  com `featureType: whatsapp_business_app_onboarding`, `sessionInfoVersion: '3'`).
+- **B — Conectar aplicativo existente:** coexistência oficial (Embedded Signup v4
+  com `featureType: whatsapp_business_app_onboarding`). Os dois cartões mandam
+  `setup: {}`, `version: 'v4'` e `sessionInfoVersion: '3'`, conferidos no verificador da Meta.
   O número continua no app do celular; a confirmação é feita no app, pelo
   código ou QR Code que a janela oficial da Meta mostrar. App 2.24.17+.
 - Mesma permissão (`whatsapp_oficial`), mesmo limite, mesmos webhooks, custos e
@@ -87,6 +88,16 @@ cartão do funil; lista completa na ficha do lead.
 - Webhooks: `smb_message_echoes` (enviadas pelo app), `history` (até 180 dias,
   só se a empresa aceitar; recusa 2593109 registrada) e `smb_app_state_sync`.
   Histórico entra nas conversas, sem criar negociação.
+- **`account_update`** (pacote 4, migration `20261105090000`):
+  - `ACCOUNT_OFFBOARDED` (troca de aparelho ou novo registro no app) é temporário:
+    o número em coexistência fica **pausado** (token mantido, "Retomar" barrado) e
+    `ACCOUNT_RECONNECTED` retoma só o que o AVANTE pausou.
+  - `PARTNER_REMOVED`, `PARTNER_APP_UNINSTALLED` (só do app AVANTE) e `ACCOUNT_DELETED`:
+    o servidor confere na Meta, com o token de cada número, se o acesso acabou.
+    Só então desconecta e apaga o token; conversas e leads ficam. Acesso mantido:
+    só registra (e avisa no painel quando a Meta informou desconexão do app).
+  - Conta pelo `waba_id` do banco; `PARTNER_*` usa `waba_info.waba_id`, nunca o `entry.id`.
+  - Avisos registrados em `whatsapp_eventos_conta` (só servidor).
 - **Sem WhatsApp Web, Baileys ou QR não oficial.** A demonstração local de
   espelhamento foi retirada do produto (servidor, telas e migration); o desenho
   ficou só como registro em `supabase/propostas/referencia_demo_whatsapp_qr_local.sql`
@@ -117,4 +128,6 @@ cartão do funil; lista completa na ficha do lead.
 3. Pacote 3 — Central (sobre o pacote 2): a migration `20261104090000` já grava
    os padrões aprovados dos planos (tabela acima) (recusa se alguma empresa com
    integração em uso perderia a permissão); deploy da `integracoes`; ZIP 3.
-4. Meta: assinar os campos de webhook da coexistência e homologar.
+4. Pacote 4 — `account_update` + parâmetros v4 dos dois cartões: migration `20261105090000`, deploy da `integracoes`, ZIP 4.
+5. Meta: assinar os campos de webhook (`messages`, `smb_message_echoes`, `history`,
+   `smb_app_state_sync`, `account_update`) e homologar.

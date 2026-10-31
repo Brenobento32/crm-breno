@@ -73,7 +73,7 @@ Testes locais: SQL `whatsapp_registro_test.sql` (50), `integracoes_sheets_whatsa
    - ícone, categoria e **URL da política de privacidade** (a mesma página pública que o Google
      também exige, em `avante.riox7comunicacao.com.br`);
    - em Login do Facebook para Empresas, domínio permitido do SDK JavaScript:
-     `https://avante.riox7comunicacao.com.br`.
+     `https://avante.riox7comunicacao.com.br` (feito em 31/10/2026).
 3. **Configuração do Login do Facebook para Empresas** para o Embedded Signup. Ao escolher os
    produtos, ela já fica em v4, e gera o **ID de configuração** (`META_CONFIG_ID`). Escolher o
    produto WhatsApp Cloud API; a opção de número do app WhatsApp Business (coexistência) só se for
@@ -81,12 +81,52 @@ Testes locais: SQL `whatsapp_registro_test.sql` (50), `integracoes_sheets_whatsa
 4. **Webhook do app**:
    - URL `https://ybgzlxgeoiggmfdxarqx.supabase.co/functions/v1/integracoes/whatsapp/webhook`;
    - token de verificação aleatório (`META_VERIFY_TOKEN`);
-   - campo **messages** assinado.
+   - campos assinados: **messages**, e para coexistência **smb_message_echoes**, **history**,
+     **smb_app_state_sync** e **account_update** (este exige a migration `20261105090000`).
 5. **App Review / Tech Provider**: acesso avançado a `whatsapp_business_messaging` e
    `whatsapp_business_management`, mais a verificação de acesso. A Meta pede 2 vídeos: uma mensagem
    enviada pelo app chegando no WhatsApp e a criação de um modelo (pode ser gravação do WhatsApp
    Manager). Antes da verificação completa, o limite é de **10 empresas novas a cada 7 dias**
    (passa a 200 depois).
+   Lista conferida na documentação da Meta em 31/10/2026 (nada submetido):
+   - [x] Verificação da empresa (Rio X7) concluída.
+   - [x] Plataforma do WhatsApp ativada no app (aceite do proprietário, 31/10/2026).
+   - [x] Cadastro como **Independent Tech Provider** (aceite do proprietário dos Termos de
+     Provedor de Tecnologia, 31/10/2026). Seção 5: proibido revender a plataforma ou cobrar
+     taxa pelo uso dela; cada empresa paga a Meta direto.
+   - [ ] Configurações básicas: política de privacidade, termos, exclusão de dados, categoria e
+     domínio do app (feitos); ícone 1024×1024 **preparado** em `docs/meta-app/avante-icone-app-1024.png`,
+     falta enviar no painel.
+   - [x] Login para Empresas (31/10/2026): domínio do SDK JS `https://avante.riox7comunicacao.com.br/`,
+     URI de retorno só `https://avante.riox7comunicacao.com.br/configuracoes/integracoes/whatsapp`
+     (a página que abre a janela; a troca do código no servidor não usa redirect), OAuth do
+     cliente, web, HTTPS forçado, modo estrito, navegador incorporado e SDK JS = Sim.
+   - [x] Configuração do Login do Facebook para Empresas **"AVANTE WhatsApp ES v4"**,
+     ID **2263375681228010** (`META_CONFIG_ID`; não é segredo, vai para o navegador):
+     variação Cadastro incorporado do WhatsApp, produto só WhatsApp Cloud API, token de
+     usuário do sistema que **nunca expira**, ativo Contas do WhatsApp ("Gerenciar"),
+     permissões `whatsapp_business_management` e `whatsapp_business_messaging`.
+     Parâmetros da janela (`extrasDoCadastro`, pacote 4):
+     `{setup:{}, version:'v4', sessionInfoVersion:'3'}` e, no cartão B,
+     `featureType:'whatsapp_business_app_onboarding'`. Verificador da Meta (31/10, contra
+     esta configuração): v4, cloud_api, sessão 3, hoje e depois de 15/10; coexistência
+     "Ativado" só no cartão B. Pela tabela oficial de versões, a v4 já devolve os IDs da
+     sessão em todos os fluxos (`sessionInfoVersion` era obrigatório só na v2). O valor fica
+     por constar no exemplo oficial de coexistência. `version:'v4'` impede a troca automática
+     para a v5, que tem outro formato.
+   - [ ] Pedido de acesso avançado: descrições e os dois roteiros de vídeo em
+     [`docs/meta-app/APP-REVIEW.md`](meta-app/APP-REVIEW.md). Cada permissão leva descrição
+     escrita + 1 vídeo próprio (sem captura de tela e sem juntar permissões no mesmo vídeo):
+     - `whatsapp_business_messaging`: mensagem enviada aparecendo no WhatsApp (pode ser o cURL
+       da tela API Setup para um número de teste cadastrado);
+     - `whatsapp_business_management`: criação de um modelo (pode ser no WhatsApp Manager).
+     - Não pedir permissões que o AVANTE não usa (`whatsapp_business_manage_events` só com
+       Marketing Messages API).
+   - [ ] Enviar o pedido (rascunho não é analisado; prazo médio ~24 h).
+   - Depois: webhook com `messages`, `smb_message_echoes`, `history`, `smb_app_state_sync`,
+     `account_update`; cada empresa cliente cadastra o próprio cartão no WhatsApp Manager.
+   - Coexistência: exige ser Tech Provider, app WhatsApp Business 2.24.17+ e registro de sessão
+     (eventos da janela). A documentação não lista países: confirmar o Brasil no próprio fluxo.
 6. **Secrets no Supabase** (você digita; nada no chat): `META_APP_ID`, `META_APP_SECRET`,
    `META_CONFIG_ID`, `META_VERIFY_TOKEN` e, opcionalmente, `META_GRAPH_VERSION`.
 

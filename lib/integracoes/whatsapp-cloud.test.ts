@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest'
 
 import {
   ErroMeta,
+  acessoAContaWhatsapp,
   conferirNumero,
   enviarTexto,
+  extrairEventosConta,
   extrairEventosWhatsapp,
   lerServicoDoMes,
+  textoAvisoDesconexaoApp,
+  textoDesvinculo,
   telefoneParaApi,
 } from '../../supabase/functions/_shared/whatsapp-cloud.ts'
 
@@ -117,5 +121,35 @@ describe('consumo do mês na Meta (franquia de 1.000 mensagens de serviço)', ()
     await expect(lerServicoDoMes(async () => new Response('{}'), cfg, 't', '111', null, 1, 2)).rejects.toBeInstanceOf(ErroMeta)
     const semCategoria = async () => new Response(JSON.stringify({ pricing_analytics: { data: [{ data_points: [{ volume: 5 }] }] } }))
     await expect(lerServicoDoMes(semCategoria, cfg, 't', '111', null, 1, 2)).rejects.toBeInstanceOf(ErroMeta)
+  })
+})
+
+describe('account_update (avisos de conta)', () => {
+  const conta = (value: object, id = '2949482758682047') => ({ object: 'whatsapp_business_account', entry: [{ id, changes: [{ field: 'account_update', value }] }] })
+  it('lê só os eventos que mudam o número; limpa motivo e origem; recusa ID inválido', () => {
+    expect(
+      extrairEventosConta(conta({ event: 'PARTNER_REMOVED', waba_info: { waba_id: '495709166956424' }, disconnection_info: { reason: "x'; drop--", initiated_by: 'user' } }), 'app'),
+    ).toEqual([{ tipo: 'desvinculo', evento: 'PARTNER_REMOVED', wabaId: '495709166956424', motivo: 'XDROP', iniciadoPor: 'USER' }])
+    expect(extrairEventosConta(conta({ event: 'ACCOUNT_OFFBOARDED' }, '102290129340398'), 'app')).toEqual([
+      { tipo: 'coexistencia', evento: 'ACCOUNT_OFFBOARDED', wabaId: '102290129340398' },
+    ])
+    expect(extrairEventosConta(conta({ event: 'ACCOUNT_OFFBOARDED' }, 'abc'), 'app')).toEqual([])
+    expect(extrairEventosConta(conta({ event: 'DISABLED_UPDATE', ban_info: {} }), 'app')).toEqual([])
+    expect(extrairEventosConta({ object: 'page', entry: [] }, 'app')).toEqual([])
+    expect(extrairEventosWhatsapp(conta({ event: 'PARTNER_REMOVED' })).mensagens).toEqual([])
+  })
+  it('acesso: 190/200/10/100 = acabou; sucesso = continua; outro erro lança (nada é decidido)', async () => {
+    const cfg = { graphUrl: 'https://meta.falsa/v23.0' }
+    const resp = (status: number, corpo: object) => async () => new Response(JSON.stringify(corpo), { status })
+    expect(await acessoAContaWhatsapp(resp(200, { id: '1' }), cfg, 't', '495709166956424')).toBe(true)
+    for (const code of [190, 200, 10, 100]) expect(await acessoAContaWhatsapp(resp(400, { error: { code } }), cfg, 't', '495709166956424')).toBe(false)
+    await expect(acessoAContaWhatsapp(resp(400, { error: { code: 4 } }), cfg, 't', '495709166956424')).rejects.toBeInstanceOf(ErroMeta)
+    await expect(acessoAContaWhatsapp(async () => { throw new Error('rede') }, cfg, 't', '495709166956424')).rejects.toBeInstanceOf(ErroMeta)
+  })
+  it('textos do painel', () => {
+    expect(textoDesvinculo('ACCOUNT_DELETED', null)).toBe('A Meta informou que a conta do WhatsApp foi excluída. Nada foi apagado; para voltar a usar, conecte o número de novo.')
+    expect(textoDesvinculo('PARTNER_REMOVED', 'CHANGE_NUMBER')).toContain('(o número foi trocado no app)')
+    expect(textoDesvinculo('PARTNER_REMOVED', 'DESCONHECIDO')).not.toContain('(')
+    expect(textoAvisoDesconexaoApp('USER_RE_REGISTERED')).toContain('registrado de novo')
   })
 })
