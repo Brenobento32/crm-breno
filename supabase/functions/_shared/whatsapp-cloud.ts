@@ -13,6 +13,8 @@ export type ConfigMeta = {
   appId: string
   appSecret: string
   configId: string // configuração do Embedded Signup (WhatsApp)
+  /** Configuração do Login do Facebook para Empresas para Meta Ads (token BISU). Vazio = só MBE. */
+  configIdAds?: string
 }
 
 type Obj = Record<string, unknown>

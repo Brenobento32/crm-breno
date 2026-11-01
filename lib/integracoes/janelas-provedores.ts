@@ -370,3 +370,42 @@ export async function conectarMetaAds(cfg: ConfigMetaAds): Promise<string | null
     }),
   )
 }
+
+// ------------------------------------------------------------------ Meta Ads: Login do Facebook para Empresas
+export type ConfigLoginMetaAds = { appId: string | null; configIdLogin: string | null; simulado?: boolean; urlLogin?: string }
+
+/**
+ * Janela oficial do Login do Facebook para Empresas (configuração do Meta Ads, token
+ * BISU). A empresa escolhe, no PRÓPRIO portfólio, as Páginas, contas de anúncios e
+ * datasets que libera; nada é transferido para a BM da Rio X7. Devolve o code de uso
+ * único (ou null se cancelado); o servidor troca pelo token e guarda no cofre.
+ */
+export async function conectarMetaAdsLogin(cfg: ConfigLoginMetaAds): Promise<string | null> {
+  if (cfg.simulado && cfg.urlLogin) {
+    // Só no ambiente local (o servidor de produção nunca responde `simulado`).
+    const u = new URL(cfg.urlLogin)
+    const j = popup(u.toString(), 'login-meta-ads')
+    const r = await esperarMensagens<{ code: string }>(
+      (o) => o === u.origin,
+      j,
+      (d) => {
+        const o = d as { origem?: string; code?: string; cancelado?: boolean }
+        if (!o || o.origem !== 'login-meta-ads') return null
+        return o.cancelado ? 'fim' : o.code ? { code: o.code } : null
+      },
+      (a) => Boolean(a.code),
+    )
+    return r?.code ?? null
+  }
+  if (!cfg.appId || !cfg.configIdLogin) throw new Error('O login do Meta Ads ainda não foi configurado na plataforma.')
+  const w = window as JanelaComSdks
+  await carregarScript('https://connect.facebook.net/pt_BR/sdk.js')
+  w.FB!.init({ appId: cfg.appId, autoLogAppEvents: true, xfbml: false, version: VERSAO_SDK_PADRAO })
+  return new Promise<string | null>((ok) =>
+    w.FB!.login((r) => ok(r.authResponse?.code ?? null), {
+      config_id: cfg.configIdLogin!,
+      response_type: 'code',
+      override_default_response_type: true,
+    }),
+  )
+}

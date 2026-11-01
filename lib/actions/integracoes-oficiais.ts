@@ -220,7 +220,17 @@ export async function enviarWhatsappAction(_: EstadoEnvio, fd: FormData): Promis
 }
 
 // ------------------------------------------------------------------ Meta Ads — Conversões do CRM
-export async function configMetaAdsAction(): Promise<Resultado<{ disponivel: boolean; appId: string | null; idExterno: string; simulado?: boolean; urlMbe?: string }>> {
+export async function configMetaAdsAction(): Promise<
+  Resultado<{
+    disponivel: boolean
+    appId: string | null
+    idExterno: string
+    simulado?: boolean
+    urlMbe?: string
+    urlLogin?: string
+    configIdLogin?: string | null
+  }>
+> {
   return chamarIntegracoes('/meta-ads/config')
 }
 
@@ -278,6 +288,53 @@ export async function reprocessarMetaAdsAction(fd: FormData): Promise<void> {
   if (!Number.isInteger(id) || id <= 0) voltarMetaAds('erro', 'Evento inválido.')
   const r = await reprocessarEventoMetaAds(id)
   voltarMetaAds(r.ok ? 'ok' : 'erro', r.ok ? 'Evento volta para a fila de envio.' : r.mensagem)
+}
+
+// ------------------------------------------------------------------ Meta Ads: Login para Empresas (multiempresa)
+export type AtivosMetaAds = {
+  negocioId: string
+  datasets: { id: string; nome: string | null }[]
+  paginas: { id: string; nome: string | null }[]
+  contas: { id: string; nome: string | null; moeda: string | null; ativa: boolean }[]
+}
+export type ResultadoSelecaoMetaAds = {
+  dataset: string | null
+  paginas: { id: string; situacao: 'conectada' | 'erro'; mensagem?: string }[]
+  contas: number | null
+}
+const idMeta = z.string().regex(/^[0-9]{5,30}$/)
+const esquemaSelecaoAds = z.object({
+  datasetId: idMeta.nullable(),
+  paginas: z.array(z.object({ id: idMeta, funil: uuid, etapa: uuid, responsavel: uuid })).max(20),
+  contas: z.array(idMeta).max(50),
+})
+
+/** code da janela do Login para Empresas → token do portfólio do cliente no cofre → ativos liberados. */
+export async function concluirMetaAdsLoginAction(code: string): Promise<Resultado<AtivosMetaAds>> {
+  if (!code || code.length > 2000) return invalido('Conclua a autorização na janela da Meta.')
+  const r = await chamarIntegracoes<AtivosMetaAds>('/meta-ads/login/concluir', { code })
+  if (r.ok) revalidatePath(`${LISTA}/meta-ads`)
+  return r
+}
+
+/** Ativos que a empresa liberou para o AVANTE (lidos de novo na Meta). */
+export async function ativosMetaAdsAction(): Promise<Resultado<AtivosMetaAds>> {
+  return chamarIntegracoes<AtivosMetaAds>('/meta-ads/login/ativos')
+}
+
+/** Dataset (Conversões do CRM), Páginas (Lead Ads) e contas de anúncios (painel) escolhidos entre os liberados. */
+export async function selecionarAtivosMetaAdsAction(dados: z.input<typeof esquemaSelecaoAds>): Promise<Resultado<ResultadoSelecaoMetaAds>> {
+  const v = esquemaSelecaoAds.safeParse(dados)
+  if (!v.success) return invalido('Escolha ativos válidos e, para cada Página, o funil, a etapa e o responsável.')
+  const r = await chamarIntegracoes<ResultadoSelecaoMetaAds>('/meta-ads/login/selecionar', v.data)
+  revalidatePath(`${LISTA}/meta-ads`)
+  return r
+}
+
+export async function desconectarMetaAdsLoginAction(): Promise<void> {
+  const { desconectarMetaAdsLogin } = await import('@/lib/dal/meta-ads')
+  const r = await desconectarMetaAdsLogin()
+  voltarMetaAds(r.ok ? 'ok' : 'erro', r.ok ? 'Meta Ads desconectado: a credencial foi apagada e as Páginas deixaram de receber leads. O histórico continua.' : r.mensagem)
 }
 
 // ------------------------------------------------------------------ Central (upgrade)

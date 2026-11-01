@@ -9,6 +9,7 @@
  *   GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_PICKER_API_KEY, GOOGLE_PICKER_APP_ID
  *   INTEGRACOES_STATE_SECRET (≥ 32), INTEGRACOES_CRON_SECRET (≥ 32), AVANTE_URL
  *   META_APP_ID, META_APP_SECRET, META_CONFIG_ID, META_VERIFY_TOKEN, META_GRAPH_VERSION (padrão v23.0)
+ *   META_ADS_CONFIG_ID (opcional: Login do Facebook para Empresas do Meta Ads)
  */
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
@@ -53,6 +54,7 @@ const deps: Dependencias = {
         appId: env('META_APP_ID'),
         appSecret: env('META_APP_SECRET'),
         configId: env('META_CONFIG_ID'),
+        configIdAds: env('META_ADS_CONFIG_ID'),
         verifyToken: env('META_VERIFY_TOKEN'),
       }
     : null,

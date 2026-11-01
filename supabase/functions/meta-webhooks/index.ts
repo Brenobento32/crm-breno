@@ -17,7 +17,7 @@
  *
  * Deploy com --no-verify-jwt (a Meta não manda JWT; /validar confere o JWT aqui).
  *
- * Secrets: META_APP_SECRET, META_VERIFY_TOKEN, META_GRAPH_VERSION (opcional, padrão v21.0).
+ * Secrets: META_APP_SECRET, META_VERIFY_TOKEN, META_GRAPH_VERSION (opcional, padrão v23.0, igual a `integracoes`).
  * Não validado com a Meta real neste código: exige app da Meta, revisão de
  * permissões (leads_retrieval, pages_manage_metadata, whatsapp_business_messaging).
  */
@@ -30,6 +30,8 @@ import {
   mapearCamposLeadMeta,
   respostaVerificacao,
 } from '../_shared/meta.ts'
+import { atribuicaoDoLead, CAMPOS_LEAD, respostasDoLead } from '../_shared/meta-ads.ts'
+import { provaDoApp } from '../_shared/meta-conversoes.ts'
 import { HEADER_TENANT, slugDaRequisicao } from '../_shared/requisicao.ts'
 
 const url = Deno.env.get('SUPABASE_URL')!
@@ -37,9 +39,17 @@ const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const appSecret = Deno.env.get('META_APP_SECRET') ?? ''
 const verifyToken = Deno.env.get('META_VERIFY_TOKEN') ?? ''
-const graph = `https://graph.facebook.com/${Deno.env.get('META_GRAPH_VERSION') ?? 'v21.0'}`
+// Mesma versão da Graph da função `integracoes` (fonte única: META_GRAPH_VERSION).
+const graph = `https://graph.facebook.com/${Deno.env.get('META_GRAPH_VERSION') || 'v23.0'}`
 
 const LIMITE_BYTES = 256 * 1024
+
+/** Chamada à Graph com o token da Página e appsecret_proof (como o resto das integrações). */
+async function graphGet(caminho: string, token: string, init: RequestInit = {}): Promise<Response> {
+  const u = new URL(`${graph}${caminho}`)
+  u.searchParams.set('appsecret_proof', await provaDoApp(token, appSecret))
+  return fetch(u.toString(), { ...init, headers: { Authorization: `Bearer ${token}` } })
+}
 
 const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } })
 
@@ -60,7 +70,13 @@ async function tokenDaFonte(fonteId: string): Promise<string | null> {
   return typeof data === 'string' && data ? data : null
 }
 
-async function ingerir(fonteId: string, externalId: string, dados: { nome: string | null; telefone: string | null; email: string | null; empresa: string | null }, atribuicao: Record<string, string>) {
+async function ingerir(
+  fonteId: string,
+  externalId: string,
+  dados: { nome: string | null; telefone: string | null; email: string | null; empresa: string | null },
+  atribuicao: Record<string, string>,
+  respostas: { pergunta_externa: string; resposta: string }[] = [],
+) {
   const { error } = await admin.rpc('ingerir_lead_fonte', {
     p_fonte: fonteId,
     p_external_id: externalId,
@@ -69,7 +85,7 @@ async function ingerir(fonteId: string, externalId: string, dados: { nome: strin
     p_email: dados.email,
     p_empresa: dados.empresa,
     p_instagram: null,
-    p_respostas: [],
+    p_respostas: respostas,
     p_atribuicao: atribuicao,
   })
   if (error) console.error('meta-webhooks ingestão:', error.code)
@@ -85,9 +101,7 @@ async function processarLeadgen(corpo: unknown): Promise<boolean> {
     const token = await tokenDaFonte(fonte.id)
     if (!token) continue
     try {
-      const r = await fetch(`${graph}/${ev.leadgenId}?fields=field_data,created_time,form_id,ad_id,campaign_id`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      const r = await graphGet(`/${ev.leadgenId}?fields=${CAMPOS_LEAD}`, token)
       if (!r.ok) {
         // Resposta 500 no fim: a Meta reenvia e o lead entra depois (idempotente).
         falhou = true
@@ -95,11 +109,9 @@ async function processarLeadgen(corpo: unknown): Promise<boolean> {
         continue
       }
       const lead = (await r.json()) as Record<string, unknown>
-      const atribuicao: Record<string, string> = { source: 'meta_lead_ads', leadgen_id: ev.leadgenId, page_id: ev.pageId }
-      for (const k of ['form_id', 'ad_id', 'campaign_id', 'created_time'] as const) {
-        if (typeof lead[k] === 'string') atribuicao[k] = lead[k] as string
-      }
-      await ingerir(fonte.id, ev.leadgenId, mapearCamposLeadMeta(lead.field_data), atribuicao)
+      // Campanha, conjunto, anúncio, formulário e plataforma (Facebook/Instagram) do lead; respostas extras na ficha.
+      const atribuicao = atribuicaoDoLead(ev.leadgenId, ev.pageId, lead)
+      await ingerir(fonte.id, ev.leadgenId, mapearCamposLeadMeta(lead.field_data), atribuicao, respostasDoLead(lead.field_data))
     } catch (e) {
       console.error('meta-webhooks leadgen:', e instanceof Error ? e.message : e)
       falhou = true
@@ -165,7 +177,7 @@ async function validar(req: Request): Promise<Response> {
   const ref = fonte.tipo === 'meta_lead_ads' ? cfg.page_id : cfg.phone_number_id
   try {
     // O token precisa enxergar EXATAMENTE esta página/número: prova de posse.
-    const r = await fetch(`${graph}/${ref}?fields=id`, { headers: { Authorization: `Bearer ${token}` } })
+    const r = await graphGet(`/${ref}?fields=id`, token)
     const corpo = (await r.json()) as { id?: string }
     if (!r.ok || corpo.id !== ref) {
       await admin.rpc('marcar_fonte_validada', { p_fonte: fonte.id, p_valida: false, p_erro: 'O token não dá acesso a esta página/número.' })
@@ -173,10 +185,7 @@ async function validar(req: Request): Promise<Response> {
     }
     if (fonte.tipo === 'meta_lead_ads') {
       // Assina a página no app para receber o evento leadgen.
-      const s = await fetch(`${graph}/${ref}/subscribed_apps?subscribed_fields=leadgen`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      const s = await graphGet(`/${ref}/subscribed_apps?subscribed_fields=leadgen`, token, { method: 'POST' })
       if (!s.ok) {
         await admin.rpc('marcar_fonte_validada', { p_fonte: fonte.id, p_valida: false, p_erro: 'Não foi possível assinar a página no app.' })
         return erro(422, 'nao_validada', 'Não foi possível assinar a página no app da Meta.')

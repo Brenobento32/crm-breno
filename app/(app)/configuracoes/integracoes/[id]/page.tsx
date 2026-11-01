@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
 
 import { PageHeaderPremium } from '@/components/layout/page-header-premium'
@@ -102,7 +103,20 @@ export default async function FontePage({ params, searchParams }: Props) {
             </section>
           )}
 
-          {item.exigeValidacao && (
+          {fonte.tipo === 'meta_lead_ads' && (
+            <section className={secao}>
+              <h2 className={legendaClass}>Conexão com a Meta</h2>
+              <p className="text-sm text-premium-secundario">
+                Página autorizada pela empresa na janela oficial da Meta (Login para Empresas); o token fica só no servidor e nunca é digitado aqui.
+                {fonte.validadaEm ? ` Validada em ${formatarDataHoraCompleta(fonte.validadaEm)}.` : ' Ainda não validada: nenhum lead é aceito.'}
+              </p>
+              <Link href="/configuracoes/integracoes/meta-ads" className={botaoSecundarioClass}>
+                Gerenciar em Meta Ads
+              </Link>
+            </section>
+          )}
+
+          {item.exigeValidacao && fonte.tipo !== 'meta_lead_ads' && (
             <section className={secao}>
               <h2 className={legendaClass}>Conexão com a Meta</h2>
               <p className="text-sm text-premium-secundario">
@@ -114,7 +128,7 @@ export default async function FontePage({ params, searchParams }: Props) {
                 <input type="hidden" name="id" value={fonte.id} />
                 <label className="block min-w-60 flex-1">
                   <span className={labelClass}>
-                    {fonte.tipo === 'meta_lead_ads' ? 'Token de acesso da página' : 'Token de acesso do WhatsApp Cloud API'}
+                    Token de acesso do WhatsApp Cloud API
                   </span>
                   <input name="segredo" type="password" autoComplete="off" required minLength={20} className={inputClass} />
                 </label>
@@ -280,7 +294,7 @@ function Instrucoes({ fonte }: { fonte: Fonte }) {
       <h2 className={legendaClass}>Como conectar</h2>
       <p className="text-premium-secundario">
         O app da Meta da Rio X7 recebe os eventos em <code>{end.meta}</code>. A empresa informa{' '}
-        {fonte.tipo === 'meta_lead_ads' ? 'a página e o token de acesso dela' : 'o número (Phone Number ID) e o token dela'}, e o CRM valida
+        {fonte.tipo === 'meta_lead_ads' ? 'a página pela janela oficial da Meta (sem digitar token)' : 'o número (Phone Number ID) e o token dela'}, e o CRM valida
         com a Meta antes de aceitar qualquer lead.
       </p>
     </section>

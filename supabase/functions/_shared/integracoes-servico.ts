@@ -43,6 +43,16 @@ import {
 import { assinaturaMetaValida, respostaVerificacao } from './meta.ts'
 import { enviarEvento, idExternoDaEmpresa, lerInstalacao, nomeDoDataset, tokenDeSistema, type EventoFila } from './meta-conversoes.ts'
 import {
+  ErroMetaAds,
+  ativosLiberados,
+  inscreverPaginaLeads,
+  metricasDaConta,
+  negocioDoCliente,
+  tokenDaPagina,
+  trocarCodigoLogin,
+  type AtivosLiberados,
+} from './meta-ads.ts'
+import {
   ErroMeta,
   acessoAContaWhatsapp,
   conferirNumero,
@@ -548,7 +558,8 @@ async function cron(deps: Dependencias, req: Request): Promise<Response> {
   const monitoramento = await manterMonitoramento(deps)
   const franquias = await reconciliarFranquias(deps)
   const conversoes = await processarConversoes(deps)
-  return json(200, { ok: true, processadas: resumo.length, resumo, monitoramento, franquias, conversoes })
+  const metricasAds = await sincronizarMetricasAds(deps)
+  return json(200, { ok: true, processadas: resumo.length, resumo, monitoramento, franquias, conversoes, metricasAds })
 }
 
 // =============================================================== WhatsApp
@@ -926,7 +937,200 @@ async function metaAdsConfig(deps: Dependencias, req: Request): Promise<Response
     disponivel: Boolean(deps.meta?.appId && deps.meta.appSecret),
     appId: deps.meta?.appId ?? null,
     idExterno: await idExternoDaEmpresa(deps.segredoEstado, ctx.tenantId),
+    // Login do Facebook para Empresas (token BISU do portfólio do cliente). Sem configuração: só MBE.
+    configIdLogin: deps.meta?.appId && deps.meta.appSecret && deps.meta.configIdAds ? deps.meta.configIdAds : null,
   })
+}
+
+// ------------------------------------------------------------------ Meta Ads multiempresa (Login para Empresas)
+const cfgAds = (deps: Dependencias) => ({ graphUrl: deps.meta!.graphUrl, appId: deps.meta!.appId, appSecret: deps.meta!.appSecret })
+const respostaErroAds = (e: unknown) =>
+  e instanceof ErroMetaAds
+    ? erro(e.codigo === '190' || e.codigo === 'autorizacao' ? 401 : 502, `meta_${e.codigo}`, e.message)
+    : erro(502, 'meta_rede', 'Falha ao falar com a Meta.')
+
+async function credencialAds(deps: Dependencias, tenantId: string): Promise<{ negocioId: string; token: string } | null> {
+  const { data } = await deps.admin.rpc('meta_ads_credencial', { p_tenant: tenantId })
+  const c = (data as { negocio_id: string; token: string | null }[] | null)?.[0]
+  return c?.token ? { negocioId: c.negocio_id, token: c.token } : null
+}
+
+/** Lista para a tela: só IDs e nomes (nunca tokens). */
+const ativosParaTela = (a: AtivosLiberados) => ({ negocioId: a.negocioId, datasets: a.datasets, paginas: a.paginas, contas: a.contas })
+
+/** POST /meta-ads/login/concluir — code da janela → token BISU do portfólio do cliente no cofre → ativos liberados. */
+async function metaAdsLoginConcluir(deps: Dependencias, req: Request): Promise<Response> {
+  if (!deps.meta?.appId || !deps.meta.appSecret || !deps.meta.configIdAds) {
+    return erro(503, 'nao_configurado', 'O login do Meta Ads ainda não foi configurado na plataforma.')
+  }
+  const ctx = await capiContexto(deps, req)
+  if ('resposta' in ctx) return ctx.resposta
+  const code = txt(((await lerCorpo(req)) ?? {}).code, 2000)
+  if (!code) return erro(422, 'dados_invalidos', 'Conclua a autorização na janela da Meta.')
+  try {
+    const token = await trocarCodigoLogin(deps.buscar, cfgAds(deps), code)
+    const negocioId = await negocioDoCliente(deps.buscar, cfgAds(deps), token)
+    const { error } = await deps.admin.rpc('meta_ads_salvar_conexao', { p_tenant: ctx.tenantId, p_usuario: ctx.userId, p_negocio_id: negocioId, p_token: token })
+    if (error) return erroDoBanco(error)
+    const ativos = await ativosLiberados(deps.buscar, cfgAds(deps), token, negocioId)
+    return json(200, { ok: true, ...ativosParaTela(ativos) })
+  } catch (e) {
+    return respostaErroAds(e)
+  }
+}
+
+/** POST /meta-ads/login/ativos — o que a empresa liberou, lido de novo na Meta com o token guardado. */
+async function metaAdsLoginAtivos(deps: Dependencias, req: Request): Promise<Response> {
+  if (!deps.meta?.appId || !deps.meta.appSecret) return erro(503, 'nao_configurado', 'A integração com a Meta ainda não foi configurada na plataforma.')
+  const ctx = await capiContexto(deps, req)
+  if ('resposta' in ctx) return ctx.resposta
+  const cred = await credencialAds(deps, ctx.tenantId)
+  if (!cred) return erro(409, 'sem_conexao', 'Conecte o Meta Ads primeiro.')
+  try {
+    return json(200, { ok: true, ...ativosParaTela(await ativosLiberados(deps.buscar, cfgAds(deps), cred.token, cred.negocioId)) })
+  } catch (e) {
+    if (e instanceof ErroMetaAds && e.codigo === '190') await deps.admin.rpc('meta_ads_registrar_erro', { p_tenant: ctx.tenantId, p_erro: e.message, p_autorizacao: true })
+    return respostaErroAds(e)
+  }
+}
+
+/**
+ * POST /meta-ads/login/selecionar — escolhe, ENTRE OS ATIVOS QUE A META LIBEROU PARA
+ * ESTE TOKEN, o dataset (Conversões do CRM), as Páginas (Lead Ads, com destino no funil)
+ * e as contas de anúncios (painel). Qualquer ID fora do que a Meta liberou é recusado.
+ * Corpo: { datasetId?, paginas?: [{ id, funil, etapa, responsavel }], contas?: [id] }
+ */
+async function metaAdsLoginSelecionar(deps: Dependencias, req: Request): Promise<Response> {
+  if (!deps.meta?.appId || !deps.meta.appSecret) return erro(503, 'nao_configurado', 'A integração com a Meta ainda não foi configurada na plataforma.')
+  const ctx = await capiContexto(deps, req)
+  if ('resposta' in ctx) return ctx.resposta
+  const c = (await lerCorpo(req)) ?? {}
+  const datasetId = c.datasetId == null ? null : txt(c.datasetId, 30)
+  const paginasPedidas = Array.isArray(c.paginas) ? c.paginas.slice(0, 20) : []
+  const contasPedidas = Array.isArray(c.contas) ? c.contas.slice(0, 50).map((x) => txt(x, 30)) : null
+  const idOk = (v: string | null) => v !== null && /^[0-9]{5,30}$/.test(v)
+  if ((c.datasetId != null && !idOk(datasetId)) || (contasPedidas && !contasPedidas.every(idOk))) {
+    return erro(422, 'dados_invalidos', 'Escolha ativos válidos.')
+  }
+  const paginas = paginasPedidas.map((p) => {
+    const o = (p && typeof p === 'object' ? p : {}) as Record<string, unknown>
+    return { id: txt(o.id, 30), funil: uuid(o.funil), etapa: uuid(o.etapa), responsavel: uuid(o.responsavel) }
+  })
+  if (paginas.some((p) => !idOk(p.id) || !p.funil || !p.etapa || !p.responsavel)) {
+    return erro(422, 'dados_invalidos', 'Cada Página precisa de funil, etapa e responsável.')
+  }
+  const cred = await credencialAds(deps, ctx.tenantId)
+  if (!cred) return erro(409, 'sem_conexao', 'Conecte o Meta Ads primeiro.')
+  let ativos: AtivosLiberados
+  try {
+    ativos = await ativosLiberados(deps.buscar, cfgAds(deps), cred.token, cred.negocioId)
+  } catch (e) {
+    return respostaErroAds(e)
+  }
+  const liberado = (lista: { id: string }[], id: string) => lista.some((x) => x.id === id)
+  if (
+    (datasetId && !liberado(ativos.datasets, datasetId)) ||
+    paginas.some((p) => !liberado(ativos.paginas, p.id!)) ||
+    (contasPedidas ?? []).some((id) => !liberado(ativos.contas, id!))
+  ) {
+    return erro(403, 'ativo_nao_liberado', 'A empresa não liberou este ativo para o AVANTE na autorização da Meta. Conecte de novo e inclua-o.')
+  }
+
+  const resumo: { dataset: string | null; paginas: { id: string; situacao: 'conectada' | 'erro'; mensagem?: string }[]; contas: number | null } = {
+    dataset: null,
+    paginas: [],
+    contas: null,
+  }
+  if (datasetId) {
+    const nome = ativos.datasets.find((d) => d.id === datasetId)?.nome ?? null
+    const { error } = await deps.admin.rpc('capi_salvar_conexao', {
+      p_tenant: ctx.tenantId,
+      p_usuario: ctx.userId,
+      p_business_id: cred.negocioId,
+      p_dataset_id: datasetId,
+      p_dataset_nome: nome,
+      p_token: cred.token,
+    })
+    if (error) return erroDoBanco(error)
+    resumo.dataset = datasetId
+  }
+  for (const p of paginas) {
+    try {
+      const pg = await tokenDaPagina(deps.buscar, cfgAds(deps), cred.token, p.id!)
+      // Banco primeiro (empresa, cota, Página de outra empresa); só então a Página é inscrita no app.
+      const { data: fonte, error } = await deps.admin.rpc('meta_ads_salvar_pagina', {
+        p_tenant: ctx.tenantId,
+        p_usuario: ctx.userId,
+        p_pagina_id: p.id,
+        p_nome: pg.nome ?? ativos.paginas.find((x) => x.id === p.id)?.nome ?? null,
+        p_token: pg.token,
+        p_funil: p.funil,
+        p_etapa: p.etapa,
+        p_responsavel: p.responsavel,
+      })
+      if (error || typeof fonte !== 'string') {
+        resumo.paginas.push({ id: p.id!, situacao: 'erro', mensagem: error?.message ?? 'Não foi possível salvar a Página.' })
+        continue
+      }
+      try {
+        await inscreverPaginaLeads(deps.buscar, cfgAds(deps), pg.token, p.id!)
+        resumo.paginas.push({ id: p.id!, situacao: 'conectada' })
+      } catch (e) {
+        const msg = e instanceof ErroMetaAds ? e.message : 'Falha ao inscrever a Página.'
+        await deps.admin.rpc('marcar_fonte_validada', { p_fonte: fonte, p_valida: false, p_erro: msg })
+        resumo.paginas.push({ id: p.id!, situacao: 'erro', mensagem: msg })
+      }
+    } catch (e) {
+      resumo.paginas.push({ id: p.id!, situacao: 'erro', mensagem: e instanceof ErroMetaAds ? e.message : 'Falha ao falar com a Meta.' })
+    }
+  }
+  if (contasPedidas) {
+    const contas = contasPedidas.map((id) => {
+      const a = ativos.contas.find((x) => x.id === id)!
+      return { id: a.id, nome: a.nome, moeda: a.moeda }
+    })
+    const { data, error } = await deps.admin.rpc('meta_ads_salvar_contas', { p_tenant: ctx.tenantId, p_usuario: ctx.userId, p_contas: contas })
+    if (error) return erroDoBanco(error)
+    resumo.contas = typeof data === 'number' ? data : contas.length
+  }
+  return json(200, { ok: true, ...resumo })
+}
+
+/** Data AAAA-MM-DD no fuso de São Paulo, deslocada em dias. */
+function diaSaoPaulo(agora: Date, deslocamento: number): string {
+  const d = new Date(agora.getTime() + deslocamento * 86400000)
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(d)
+}
+
+/**
+ * Métricas das contas de anúncios (Marketing API, leitura): últimos 7 dias (30 na
+ * primeira vez), cada conta no máximo a cada ~50 min. Erro de autorização pede reconexão.
+ */
+export async function sincronizarMetricasAds(deps: Dependencias, limite = 10, agora = new Date()) {
+  const resumo = { contas: 0, linhas: 0, erros: 0 }
+  if (!deps.meta?.appSecret) return resumo
+  const { data, error } = await deps.admin.rpc('meta_ads_contas_para_sincronizar', { p_limite: limite })
+  if (error) return resumo
+  for (const c of (data as { conta_ref: string; tenant_id: string; conta_id: string; token: string; ultima: string | null }[] | null) ?? []) {
+    try {
+      const linhas = await metricasDaConta(deps.buscar, cfgAds(deps), c.token, c.conta_id, {
+        desde: diaSaoPaulo(agora, c.ultima ? -6 : -29),
+        ate: diaSaoPaulo(agora, 0),
+      })
+      const { data: n } = await deps.admin.rpc('meta_ads_registrar_metricas', { p_conta_ref: c.conta_ref, p_linhas: linhas })
+      resumo.contas++
+      resumo.linhas += typeof n === 'number' ? n : 0
+    } catch (e) {
+      resumo.erros++
+      const autorizacao = e instanceof ErroMetaAds && e.codigo === '190'
+      await deps.admin.rpc('meta_ads_registrar_erro', {
+        p_tenant: c.tenant_id,
+        p_erro: e instanceof ErroMetaAds ? e.message : 'Falha ao ler as métricas na Meta.',
+        p_autorizacao: autorizacao,
+      })
+    }
+  }
+  return resumo
 }
 
 /** Code da janela da Meta (MBE) → instalação desta empresa → token de sistema no cofre. */
@@ -1035,6 +1239,12 @@ export async function tratarIntegracoes(req: Request, deps: Dependencias): Promi
         return await metaAdsConfig(deps, req)
       case '/meta-ads/concluir':
         return await metaAdsConcluir(deps, req)
+      case '/meta-ads/login/concluir':
+        return await metaAdsLoginConcluir(deps, req)
+      case '/meta-ads/login/ativos':
+        return await metaAdsLoginAtivos(deps, req)
+      case '/meta-ads/login/selecionar':
+        return await metaAdsLoginSelecionar(deps, req)
       default:
         return erro(404, 'rota', 'Rota desconhecida.')
     }

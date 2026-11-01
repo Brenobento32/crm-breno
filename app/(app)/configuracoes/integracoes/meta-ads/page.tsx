@@ -9,12 +9,16 @@ import { EstadoVazio } from '@/components/ui/estado-vazio'
 import { ajudaClass, botaoCompactoClass, botaoPerigoClass, botaoPrimarioClass, botaoSecundarioClass, inputClass } from '@/components/ui/estilos'
 import { Secao } from '@/components/ui/secao'
 import { Selo, type TomSelo } from '@/components/ui/selo'
-import { acaoMetaAdsAction, reprocessarMetaAdsAction, salvarMetaAdsAction } from '@/lib/actions/integracoes-oficiais'
+import { acaoMetaAdsAction, desconectarMetaAdsLoginAction, reprocessarMetaAdsAction, salvarMetaAdsAction } from '@/lib/actions/integracoes-oficiais'
 import { getUsuarioAtual } from '@/lib/dal/auth'
+import { listarResponsaveis } from '@/lib/dal/clientes'
+import { opcoesDeDestino } from '@/lib/dal/fontes-leads'
 import { integracoesHabilitadas, podeAdministrarIntegracoes } from '@/lib/dal/integracoes-oficiais'
+import { metaAdsDaEmpresa } from '@/lib/dal/meta-ads'
 import { conexaoMetaAds, eventosMetaAds, funisComEtapas } from '@/lib/dal/meta-conversoes'
 import { formatarDataHoraCompleta } from '@/lib/utils/formatacao'
 
+import { AtivosMetaAds } from './ativos-meta-ads'
 import { ConectarMetaAds } from './conectar-meta-ads'
 
 export const metadata: Metadata = { title: 'Meta Ads — Conversões do CRM' }
@@ -39,13 +43,16 @@ const sugestao = (nome: string, tipo: string) => (tipo === 'perdida' ? '' : nome
 export default async function MetaAdsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const eu = await getUsuarioAtual()
   if (eu.role !== 'gerente') notFound()
-  const [podeGerir, conexao, funis, eventos, params, habilitadas] = await Promise.all([
+  const [podeGerir, conexao, funis, eventos, params, habilitadas, login, opcoes, responsaveis] = await Promise.all([
     podeAdministrarIntegracoes(),
     conexaoMetaAds(),
     funisComEtapas(),
     eventosMetaAds(50),
     searchParams,
     integracoesHabilitadas(),
+    metaAdsDaEmpresa(),
+    opcoesDeDestino(),
+    listarResponsaveis(),
   ])
   const elegivel = Boolean(conexao?.elegivel)
   const conectada = Boolean(conexao?.conexaoId)
@@ -72,6 +79,55 @@ export default async function MetaAdsPage({ searchParams }: { searchParams: Prom
         </Aviso>
       ) : (
         <>
+          <Secao
+            titulo="Ativos da empresa na Meta"
+            descricao="Conecte, pelo Login do Facebook para Empresas, as Páginas (leads dos formulários do Facebook e do Instagram), as contas de anúncios (painel de campanhas) e o dataset (Conversões do CRM) do portfólio da SUA empresa, mesmo fora da Rio X7."
+          >
+            <div className="space-y-3 pb-5 text-sm">
+              {login?.conexao && (
+                <div className="space-y-1 text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium text-sm">Portfólio {login.conexao.negocioId}</span>
+                    <Selo tom={login.conexao.situacao === 'ativa' ? 'verde' : 'vermelho'}>
+                      {login.conexao.situacao === 'ativa' ? 'Conectado' : 'Reautorizar na Meta'}
+                    </Selo>
+                  </div>
+                  <p className="text-premium-mudo">
+                    {login.paginas.filter((p) => p.status === 'ativa').length} Página(s) recebendo leads · {login.contas.length} conta(s) de anúncios
+                    {login.conexao.ultimaSincronizacaoEm ? ` · métricas atualizadas em ${formatarDataHoraCompleta(login.conexao.ultimaSincronizacaoEm)}` : ''}
+                  </p>
+                  {login.conexao.ultimoErro && <p className="text-red-700 dark:text-red-300">Último erro: {login.conexao.ultimoErro}</p>}
+                </div>
+              )}
+              <AtivosMetaAds
+                conectada={Boolean(login?.conexao)}
+                opcoes={opcoes}
+                responsaveis={responsaveis.map((r) => ({ id: r.id, nome: r.nome }))}
+                atuais={{
+                  datasetId: conexao?.datasetId ?? null,
+                  paginas: (login?.paginas ?? []).filter((p) => p.status === 'ativa').map((p) => ({ pageId: p.pageId, funilId: p.funilId, etapaId: p.etapaId, responsavelId: p.responsavelId })),
+                  contas: (login?.contas ?? []).map((c) => c.contaId),
+                }}
+              />
+              {login?.conexao && (
+                <div className="flex flex-wrap gap-2">
+                  {login.contas.length > 0 && (
+                    <Link href="/configuracoes/integracoes/meta-ads/painel" className={botaoSecundarioClass}>
+                      Ver painel de campanhas
+                    </Link>
+                  )}
+                  <form action={desconectarMetaAdsLoginAction}>
+                    <BotaoConfirmar
+                      pergunta="Desconectar o Meta Ads da empresa? A credencial é apagada, as Páginas deixam de receber leads e as métricas param de atualizar. Leads e histórico continuam."
+                      className={botaoPerigoClass}
+                    >
+                      Desconectar Páginas e contas
+                    </BotaoConfirmar>
+                  </form>
+                </div>
+              )}
+            </div>
+          </Secao>
           <Secao titulo="1. Conta Meta" descricao="Você autoriza na janela oficial da Meta e escolhe o conjunto de dados (dataset) de CRM da empresa. Nenhum token é digitado aqui; a credencial fica guardada só no servidor.">
             <div className="space-y-3 pb-5 text-sm">
               {!conectada ? (

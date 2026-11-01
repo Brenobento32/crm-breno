@@ -61,9 +61,9 @@ export const CATALOGO: ItemCatalogo[] = [
   {
     tipo: 'meta_lead_ads',
     nome: 'Meta Lead Ads',
-    descricao: 'Formulários nativos de anúncios do Facebook/Instagram da página da empresa.',
+    descricao: 'Formulários nativos de anúncios do Facebook/Instagram: a empresa autoriza as próprias Páginas na janela oficial da Meta (Meta Ads › Ativos da empresa). Nenhum token é digitado.',
     situacao: 'requer_configuracao',
-    rotuloSituacao: 'Requer app da Meta, token da página e validação',
+    rotuloSituacao: 'Conexão oficial da Meta (Login para Empresas)',
     usaToken: false,
     exigeValidacao: true,
   },
@@ -90,11 +90,12 @@ export const CATALOGO: ItemCatalogo[] = [
 export const TIPOS_FONTE: TipoFonte[] = ['formulario_rx7', 'webhook', 'google_sheets', 'respondi', 'meta_lead_ads', 'whatsapp_cloud']
 
 /**
- * Tipos criados pelo formulário de token/configuração manual. Google Sheets e
- * WhatsApp oficial têm conexão própria (OAuth do Google / cadastro da Meta),
- * com credenciais guardadas só no servidor — não entram aqui.
+ * Tipos criados pelo formulário de token/configuração manual. Google Sheets,
+ * WhatsApp oficial e Meta Lead Ads têm conexão própria (OAuth do Google / janelas
+ * oficiais da Meta), com credenciais guardadas só no servidor — não entram aqui:
+ * a empresa nunca digita nem entrega token.
  */
-export const TIPOS_FONTE_MANUAIS: TipoFonte[] = ['formulario_rx7', 'webhook', 'respondi', 'meta_lead_ads']
+export const TIPOS_FONTE_MANUAIS: TipoFonte[] = ['formulario_rx7', 'webhook', 'respondi']
 
 /** Tipos com conexão oficial (telas próprias em Integrações). */
 export const TIPOS_CONEXAO_OFICIAL: TipoFonte[] = ['google_sheets', 'whatsapp_cloud']
