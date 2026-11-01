@@ -84,7 +84,7 @@ das integrações (Meta, Google, WhatsApp) ficam no Supabase e **não** vão par
 - Funil: Lead Novo ordenado pela data real do envio; filtro "Entrada do lead"; qualificação recolhida no
   painel lateral; deduplicação por ID do lead da Meta, telefone e e-mail.
 - Google Sheets: operacional, liberado só para Rio X7 Agência Digital e Empresa Teste A. Consentimento
-  OAuth ainda em "Teste" (token de 7 dias; ver `docs/GOOGLE-OAUTH-PUBLICACAO.md` quando versionado).
+  OAuth ainda em "Teste" (token de 7 dias; ver `docs/GOOGLE-OAUTH-PUBLICACAO.md`).
 - Meta Ads: só a conta de anúncios da Rio X7 (BM Bento) conectada, leitura de métricas. Nenhuma Página,
   dataset, Conversions API ou número de WhatsApp conectado. Chaves globais desligadas. App Meta não
   publicado.
@@ -130,7 +130,7 @@ pacote.
 
 | Item | Para que serve | No Mac |
 | --- | --- | --- |
-| Alterações locais não versionadas: `next.config.ts` (posição do indicador de desenvolvimento), `docs/GOOGLE-OAUTH-PUBLICACAO.md`, `docs/meta-app/avante-icone-app-1024.jpg`, `supabase/functions/_shared/meta-conversoes-mensagens.ts` e teste (Click-to-WhatsApp, em proposta), `supabase/propostas/*` | trabalho em andamento | versionar o que for aprovado, depois de auditoria; até lá, só existe no Windows |
+| Alterações locais não versionadas: `next.config.ts` (posição do indicador de desenvolvimento), `supabase/functions/_shared/meta-conversoes-mensagens.ts` e teste (Click-to-WhatsApp, em proposta), `supabase/propostas/*` | trabalho em andamento | versionar o que for aprovado, depois de auditoria; até lá, só existe no Windows |
 | Branch local `pacote-5-inscricao-waba` | 1 commit substituído (nunca publicado) | não precisa |
 | `C:\Tools\avante-local` (servidor local, emulador de Google/Meta, testes de tela, seeds) | testes locais com dados fictícios | copiar a pasta **sem** `segredos.json` (senhas de teste: recriar); trocar caminhos `C:/Tools/...`, `psql.exe` e do Chrome |
 | `C:\Tools\crm-rx7` (scripts `.ps1`/`.sh`, consultas SQL de conferência, registros de publicação, `wt-pub`, pastas `pubN`) | publicação controlada | levar só as consultas `.sql` e os registros `.md`; **não** levar `segredos\`, `pubN\supabase\.temp`, ZIPs nem `wt-pub` (refazer com `git worktree`) |
