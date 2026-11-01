@@ -8,6 +8,10 @@
  * usuário autorizar aquele arquivo no seletor oficial (Google Picker).
  */
 
+import { COLUNAS_DATA_ENVIO, colunaNaoEIdDoLead, dataDoEnvio } from './planilha-colunas.ts'
+
+export { colunaNaoEIdDoLead }
+
 export const ESCOPOS_GOOGLE_SHEETS = ['openid', 'email', 'https://www.googleapis.com/auth/drive.file'] as const
 
 export type ConfigGoogle = {
@@ -273,12 +277,22 @@ const PISTAS: Record<Campo, RegExp> = {
 }
 const PISTAS_CHAVE = /^(id|codigo|identificador|carimbo de data hora|timestamp|data hora do envio|submission id|response id)$/
 
+/** Export dos Lead Ads da Meta para planilha (a coluna `id` é o ID do lead). */
+function exportDaMeta(cabecalho: string[]): boolean {
+  const n = new Set(cabecalho.map((h) => normalizar(h ?? '')))
+  return n.has('id') && ['form id', 'campaign id', 'ad id', 'is organic', 'created time'].filter((c) => n.has(c)).length >= 2
+}
+
 /** Sugestão automática a partir do cabeçalho (o Administrador confirma ou ajusta). */
 export function sugerirMapeamento(cabecalho: string[]): { mapeamento: Mapeamento; chave: string | null } {
   const mapeamento: Mapeamento = {}
   for (const campo of CAMPOS_SUPORTADOS) {
     const achado = cabecalho.find((h) => h && PISTAS[campo].test(normalizar(h)) && !Object.values(mapeamento).includes(h))
     if (achado) mapeamento[campo] = achado
+  }
+  if (!mapeamento.meta_lead_id && exportDaMeta(cabecalho)) {
+    const id = cabecalho.find((h) => h && normalizar(h) === 'id')
+    if (id) mapeamento.meta_lead_id = id
   }
   const chave = cabecalho.find((h) => h && PISTAS_CHAVE.test(normalizar(h))) ?? null
   return { mapeamento, chave }
@@ -310,6 +324,8 @@ export type LinhaLead = {
   email: string | null
   empresa: string | null
   meta_lead_id: string | null
+  /** Data real do envio (ISO, UTC) lida da coluna de data do formulário; null se não houver. */
+  data_envio: string | null
   /** Todas as outras perguntas da linha (cabeçalho → resposta), na ordem da planilha. Vazias ficam de fora. */
   respostas: { pergunta: string; resposta: string }[]
 }
@@ -348,8 +364,9 @@ export async function montarLeads(
   colunaChave: string | null,
 ): Promise<{ leads: LinhaLead[]; vazias: number }> {
   const indice = (coluna?: string | null) => (coluna ? cabecalho.indexOf(coluna) : -1)
-  const ix = { nome: indice(m.nome), telefone: indice(m.telefone), email: indice(m.email), empresa: indice(m.empresa), metaLead: indice(m.meta_lead_id), chave: indice(colunaChave) }
+  const ix = { nome: indice(m.nome), telefone: indice(m.telefone), email: indice(m.email), empresa: indice(m.empresa), metaLead: colunaNaoEIdDoLead(m.meta_lead_id) ? -1 : indice(m.meta_lead_id), chave: indice(colunaChave) }
   const valor = (l: string[], i: number) => (i >= 0 ? (l[i] ?? '').trim() : '') || null
+  const ixData = cabecalho.findIndex((h) => Boolean(h) && COLUNAS_DATA_ENVIO.has(normalizar(h)))
   const leads: LinhaLead[] = []
   let vazias = 0
   for (const l of linhas) {
@@ -372,6 +389,7 @@ export async function montarLeads(
       email,
       empresa: valor(l.valores, ix.empresa),
       meta_lead_id: valor(l.valores, ix.metaLead),
+      data_envio: dataDoEnvio(valor(l.valores, ixData)),
       respostas: respostasDaLinha(cabecalho, l.valores, m),
     })
   }

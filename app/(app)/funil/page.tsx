@@ -9,6 +9,7 @@ import { DIAS_VISIVEIS_ENCERRADOS, listarCardsFunil } from '@/lib/dal/funil'
 import { listarFunis, resolverFunilSelecionado } from '@/lib/dal/funis'
 import { obterPermissoesFunil } from '@/lib/dal/permissoes'
 import { listarServicosAtivos } from '@/lib/dal/servicos'
+import { dentroDoFiltroEntrada, resolverFiltroEntrada } from '@/lib/utils/filtro-entrada'
 import { COOKIE_FUNIL } from '@/lib/utils/preferencia-funil'
 import { CARGOS_POR_AREA } from '@/lib/validations/usuario'
 
@@ -22,7 +23,9 @@ export const metadata: Metadata = {
 /** Kanban operacional. As métricas ficam em /funil/metricas. */
 export default async function FunilPage({ searchParams }: PageProps<'/funil'>) {
   const [usuario, cookieStore] = await Promise.all([getUsuarioAtual(), cookies()])
-  const { funil: funilParam, responsavel, temperatura } = await searchParams
+  const { funil: funilParam, responsavel, temperatura, entrada, de, ate } = await searchParams
+  // "Entrada do lead": só filtra a exibição (data real de entrada, calendário de São Paulo).
+  const filtroEntrada = resolverFiltroEntrada(entrada, de, ate)
 
   const funilSelecionado = await resolverFunilSelecionado(funilParam, cookieStore.get(COOKIE_FUNIL)?.value)
   const funis = await listarFunis()
@@ -54,7 +57,8 @@ export default async function FunilPage({ searchParams }: PageProps<'/funil'>) {
   const cardsFiltrados = cards.filter(
     (c) =>
       (typeof responsavel !== 'string' || responsavel === '' || c.responsavel === responsavel) &&
-      (typeof temperatura !== 'string' || temperatura === '' || c.temperatura === temperatura),
+      (typeof temperatura !== 'string' || temperatura === '' || c.temperatura === temperatura) &&
+      dentroDoFiltroEntrada(c.dataChegada, filtroEntrada),
   )
 
   // Coluna aparece se o gerente vê tudo OU se há permissão de ver
@@ -90,6 +94,8 @@ export default async function FunilPage({ searchParams }: PageProps<'/funil'>) {
         funilId={funilSelecionado.id}
         responsaveis={responsaveis}
         podeConfigurar={usuario.role === 'gerente'}
+        filtroEntrada={filtroEntrada}
+        totalVisiveis={cardsFiltrados.length}
       />
 
       <Kanban

@@ -51,6 +51,8 @@ export function DrawerNegociacao({
   const [historico, setHistorico] = useState<LinhaHistoricoBruta[] | null>(null)
   const [respostas, setRespostas] = useState<RespostaLead[] | null>(null)
   const [detalhes, setDetalhes] = useState<DetalhesLeadNegociacao | null>(null)
+  // Qualificação começa recolhida (formulários longos empurravam a negociação e as ações para baixo).
+  const [qualificacaoAberta, setQualificacaoAberta] = useState(false)
   const [carregando, startTransition] = useTransition()
 
   useEffect(() => {
@@ -134,8 +136,22 @@ export function DrawerNegociacao({
 
           {respostas !== null && respostas.length > 0 && (
             <section className="space-y-3 border-t border-premium-borda pt-4">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-premium-mudo">Qualificação</h3>
-              <dl className="space-y-3 text-sm">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-premium-mudo">
+                  Qualificação <span className="font-normal normal-case tracking-normal">({respostas.length === 1 ? '1 resposta' : `${respostas.length} respostas`})</span>
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setQualificacaoAberta((v) => !v)}
+                  aria-expanded={qualificacaoAberta}
+                  aria-controls="drawer-qualificacao"
+                  className={botaoCompactoClass}
+                >
+                  {qualificacaoAberta ? 'Recolher qualificação' : 'Expandir qualificação'}
+                </button>
+              </div>
+              {/* Recolher só esconde: as respostas continuam carregadas (nada é perdido nem refeito). */}
+              <dl id="drawer-qualificacao" hidden={!qualificacaoAberta} className="space-y-3 text-sm">
                 {respostas.map((r, i) => (
                   <div key={`${r.pergunta}-${i}`}>
                     {r.envio && r.envio !== respostas[i - 1]?.envio && (

@@ -14,6 +14,7 @@ import {
   type Resultado,
 } from '@/lib/dal/integracoes-oficiais'
 import { acaoMetaAds, configurarMetaAds, reprocessarEventoMetaAds } from '@/lib/dal/meta-conversoes'
+import { colunaNaoEIdDoLead } from '@/supabase/functions/_shared/planilha-colunas'
 
 /**
  * Ações das integrações oficiais (Google Sheets e WhatsApp Business).
@@ -94,6 +95,9 @@ export async function conectarPlanilhaAction(dados: z.input<typeof esquemaPlanil
   if (!p.success) return invalido(p.error.issues[0]?.message ?? 'Confira os dados da conexão.')
   const m = Object.fromEntries(Object.entries(p.data.mapeamento).filter(([, v]) => v))
   if (!m.telefone && !m.email) return invalido('Escolha ao menos a coluna de Telefone ou de E-mail.')
+  if (colunaNaoEIdDoLead(m.meta_lead_id)) {
+    return invalido(`A coluna "${m.meta_lead_id}" é o ID do anúncio, do conjunto, da campanha ou do formulário, não do lead. No export dos Lead Ads, o ID do lead é a coluna "id".`)
+  }
   const criada = await criarPlanilha({ ...p.data, mapeamento: m })
   if (!criada.ok) return criada
   const sinc = await chamarIntegracoes<{ resultado: ResumoSincronizacao }>('/google/sincronizar', { fonte: criada.id })

@@ -150,6 +150,33 @@ describe('mapeamento de colunas', () => {
     expect(mapeamentoValido({ telefone: 'Fone' }, ['Telefone'])).toMatch(/não existe/)
     expect(mapeamentoValido({ telefone: 'Telefone' }, ['Telefone'])).toBeNull()
   })
+
+  // Cabeçalho real do export dos Lead Ads da Meta (como na planilha da Rio X7).
+  const META = ['id', 'created_time', 'ad_id', 'ad_name', 'adset_id', 'adset_name', 'campaign_id', 'campaign_name', 'form_id', 'form_name', 'is_organic', 'platform', 'Nome', 'Email', 'Telefone']
+
+  it('export dos Lead Ads: sugere a coluna "id" como ID do lead (nunca ad_id) e como chave', () => {
+    const s = sugerirMapeamento(META)
+    expect(s.mapeamento.meta_lead_id).toBe('id')
+    expect(s.chave).toBe('id')
+    // Planilha comum com coluna "id" não vira ID de lead da Meta.
+    expect(sugerirMapeamento(['id', 'Nome', 'Telefone']).mapeamento.meta_lead_id).toBeUndefined()
+  })
+
+  it('lê a data real do envio e ignora ad_id escolhido como ID do lead (a conexão segue sincronizando)', async () => {
+    const linha = { numero: 2, valores: ['l:123456789012345', '2026-10-30T10:00:00-03:00', 'ag:120254490122630204', 'Vídeo', 'as:1', 'Público', 'c:1', 'RX7 | FORMS', 'f:1', 'Form', 'false', 'ig', 'Ana', 'ana@x.com', 'p:+5511999990001'] }
+    const certo = (await montarLeads(META, [linha], { nome: 'Nome', email: 'Email', telefone: 'Telefone', meta_lead_id: 'id' }, 'id')).leads[0]
+    expect(certo.meta_lead_id).toBe('l:123456789012345')
+    expect(certo.data_envio).toBe('2026-10-30T13:00:00.000Z')
+    expect(certo.respostas.some((r) => r.pergunta === 'created_time')).toBe(true)
+    const errado = (await montarLeads(META, [linha], { nome: 'Nome', email: 'Email', telefone: 'Telefone', meta_lead_id: 'ad_id' }, 'id')).leads[0]
+    expect(errado.meta_lead_id).toBeNull()
+    expect(mapeamentoValido({ telefone: 'Telefone', meta_lead_id: 'ad_id' }, META)).toBeNull()
+  })
+
+  it('sem coluna de data do envio: data_envio fica vazia (o funil usa a data de entrada de sempre)', async () => {
+    const { leads } = await montarLeads(['Nome', 'Telefone'], [{ numero: 2, valores: ['Ana', '11999990001'] }], { nome: 'Nome', telefone: 'Telefone' }, null)
+    expect(leads[0].data_envio).toBeNull()
+  })
 })
 
 describe('chave estável (idempotência)', () => {

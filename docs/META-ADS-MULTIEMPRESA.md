@@ -175,3 +175,39 @@ O AVANTE **nunca** cria, edita, pausa campanhas nem gera gasto.
 3. **Campanha de origem e devolutivas** (qualificação/venda) pela Conversions API, com dataset
    autorizado pela BM Bento e mapeamento das etapas do funil; validar antes com código de teste se a
    Meta exige `ads_management`.
+
+### Devolutivas pela Conversions API: análise de 01/11/2026 (nada ativado)
+
+- **Identificador.** Os 48 leads da planilha da Rio X7 (export dos Lead Ads) têm o `leadgen_id`
+  original na coluna `id` (`l:` + 15 a 17 dígitos, todos válidos e distintos), além de
+  `created_time`, `adset_id`, `form_id` e `platform`. Em parte das linhas, `campaign_id`/`campaign_name`
+  vieram com a mensagem de permissão da Meta. Para a CAPI de CRM basta o `lead_id`
+  (`user_data.lead_id`); e-mail e telefone com hash são opcionais e ficam de fora (mínimo necessário).
+- **Correção pendente de dados.** A conexão foi criada com "ID do lead Meta" = `ad_id` (ID do anúncio):
+  46 leads sem ID e 2 com o ID do anúncio. SQL preparado fora do repositório
+  (`rio-x7-corrigir-meta-lead-id.sql`): mapeamento → `id` e `meta_lead_id` dos 48 a partir da
+  resposta `id`. Desde a migration 20261108090000, a tela recusa `ad_id`/`adset_id`/`campaign_id`/
+  `form_id` como ID do lead e a sincronização ignora essas colunas.
+- **Mapeamento sugerido (Funil Principal da Rio X7).** MQL → lead qualificado; Reunião realizada →
+  reunião realizada; Fechado → venda, com valor (`enviar_valor`, do fechamento, em BRL). Lead Novo
+  não é enviado (a Meta já tem o lead). Os nomes dos eventos são livres na CAPI de CRM; manter os
+  mesmos para sempre.
+- **Já pronto no código.** Fila `meta_conversoes_eventos`: evento só na mudança real de etapa (gatilho
+  em `historico_etapas`), `event_id` único por negociação e etapa (sem duplicar), sem ID →
+  `sem_correspondencia`, novas tentativas com espera, expira após 7 dias, sucesso/erro/`fbtrace_id`
+  registrados, código de teste do Events Manager.
+- **Falta (cada item com autorização).**
+  1. Executar o SQL de correção da Rio X7.
+  2. Dataset da BM Bento ligado à Página dos formulários.
+  3. Permissão da conexão: MBE com `manage_business_extension` ou token de usuário do sistema da
+     BM Bento. Validar com evento de teste se a Meta exige `ads_management`.
+  4. Mapear as etapas na Central.
+  5. Enviar eventos de teste com código de teste.
+  6. Ligar o envio só para a Rio X7.
+  7. Para otimizar campanhas por etapa (conversion leads), seguir os requisitos da Meta no Events
+     Manager: volume mínimo de leads por mês, envio diário e taxa de conversão da etapa-alvo. A
+     campanha e o objetivo não mudam.
+- **LGPD.** A finalidade é medir e otimizar anúncios. Base: legítimo interesse ou consentimento do
+  formulário. A política de privacidade da Rio X7 deve citar o compartilhamento com a Meta. Envia só
+  o `lead_id` e o nome da etapa (valor apenas em Fechado). O titular pode pedir oposição: desligar o
+  envio da empresa ou excluir a negociação para os eventos seguintes.

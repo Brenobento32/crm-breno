@@ -16,6 +16,7 @@ import {
   type ResumoSincronizacao,
 } from '@/lib/actions/integracoes-oficiais'
 import { escolherPlanilhaNoGoogle } from '@/lib/integracoes/janelas-provedores'
+import { colunaNaoEIdDoLead } from '@/supabase/functions/_shared/planilha-colunas'
 
 import { SeletorDestino, type Destino, type OpcoesDestino } from '../_components/seletor-destino'
 
@@ -355,7 +356,12 @@ export function AssistentePlanilha({
                     </span>
                   </label>
                 </div>
-                {mapa.meta_lead_id && (
+                {colunaNaoEIdDoLead(mapa.meta_lead_id) ? (
+                  <Aviso tom="erro">
+                    A coluna &quot;{mapa.meta_lead_id}&quot; é o ID do anúncio, do conjunto, da campanha ou do formulário, não do lead. No export dos Lead Ads, o ID do
+                    lead é a coluna &quot;id&quot;.
+                  </Aviso>
+                ) : mapa.meta_lead_id && (
                   <p className={ajudaClass}>
                     Use o ID do lead só se a planilha for alimentada pelos formulários nativos da Meta (Lead Ads): ele permite devolver as etapas do funil para a Meta.
                     Valores que não forem um ID válido são ignorados.

@@ -17,6 +17,7 @@ import {
 } from '@/lib/utils/etapas'
 import type { AtualizarFechamentoInput, FechamentoInput, PerdaInput } from '@/lib/validations/funil'
 import type { NovaNegociacaoInput } from '@/lib/validations/funis'
+import { CHAVES_DATA_ENVIO, dataDoEnvio } from '@/supabase/functions/_shared/planilha-colunas'
 
 type Enums = Database['public']['Enums']
 
@@ -202,8 +203,54 @@ export async function listarCardsFunil(funilId: string): Promise<CardFunil[]> {
     throw new Error('Não foi possível carregar o funil.', { cause: error })
   }
 
-  const [criadoEm, resumo] = await Promise.all([buscarCriadoEm(supabase, data), buscarResumoRespostas(supabase, data)])
-  return data.flatMap((r) => paraCardFunil(r, agora, criadoEm)).map((c) => (resumo.has(c.id) ? { ...c, resumoRespostas: resumo.get(c.id) } : c))
+  const [criadoEm, resumo, envios] = await Promise.all([
+    buscarCriadoEm(supabase, data),
+    buscarResumoRespostas(supabase, data),
+    buscarDataDoEnvioPlanilha(supabase, data),
+  ])
+  return data
+    .flatMap((r) => paraCardFunil(r, agora, criadoEm))
+    .map((c) => {
+      const envio = envios.get(c.id)
+      const comData = envio ? { ...c, dataChegada: envio } : c
+      return resumo.has(c.id) ? { ...comData, resumoRespostas: resumo.get(c.id) } : comData
+    })
+}
+
+/**
+ * Leads de planilha gravados sem `data_formulario` (importados antes da
+ * migration 20261108090000): a data real do envio está na própria resposta
+ * guardada (`created_time`, "Carimbo de data/hora"…). Só leitura, RLS
+ * valendo; nada é regravado no lead. Vale o envio mais antigo da negociação
+ * (a entrada dela); sem data válida, fica o `dataChegada` de sempre.
+ */
+async function buscarDataDoEnvioPlanilha(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  linhas: LinhaFunilCards[],
+): Promise<Map<string, string>> {
+  const ids = linhas.flatMap((r) => {
+    const a = r.atribuicao as AtribuicaoCampanha | null
+    return r.id && a?.fonte === 'google_sheets' && !a.data_formulario ? [r.id] : []
+  })
+  const mapa = new Map<string, string>()
+  if (ids.length === 0) return mapa
+  // Tabela fora dos tipos gerados (migration 20261104090000): mesma consulta, sem tipagem.
+  const de = supabase.from.bind(supabase) as unknown as (t: string) => {
+    select: (c: string) => { in: (c: string, v: string[]) => { in: (c: string, v: string[]) => PromiseLike<{ data: unknown; error: unknown }> } }
+  }
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await de('negociacao_respostas')
+      .select('negociacao_id, resposta')
+      .in('negociacao_id', ids.slice(i, i + 200))
+      .in('chave', CHAVES_DATA_ENVIO)
+    if (error || !Array.isArray(data)) continue
+    for (const r of data as { negociacao_id: string; resposta: string }[]) {
+      const iso = dataDoEnvio(r.resposta)
+      const atual = mapa.get(r.negociacao_id)
+      if (iso && (!atual || iso < atual)) mapa.set(r.negociacao_id, iso)
+    }
+  }
+  return mapa
 }
 
 /**
