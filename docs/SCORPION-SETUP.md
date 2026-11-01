@@ -1,5 +1,11 @@
 # Scorpion CRM — Setup em outra máquina
 
+> **DESATUALIZADO (01/11/2026).** Para máquina nova, Windows ou Mac, siga
+> [`docs/CONTINUIDADE-WINDOWS-MAC.md`](CONTINUIDADE-WINDOWS-MAC.md). Este guia é anterior à migração
+> para a Rio X7: o projeto Supabase citado na seção 8 (`lonyiyopurzxnczwrysm`) é o antigo da Scorpion
+> e **não deve ser usado**; o projeto do AVANTE é `ybgzlxgeoiggmfdxarqx`. O site não usa mais a Vercel
+> (publicação manual na Hostinger). O restante fica só como histórico.
+
 Guia para configurar o projeto do zero numa máquina nova, a partir só do que
 está no GitHub. Para arquitetura, modelo de dados e convenções de código, veja
 [`docs/ARQUITETURA.md`](ARQUITETURA.md) — este documento cobre só o "como
