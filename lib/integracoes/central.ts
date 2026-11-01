@@ -77,10 +77,12 @@ export const INFO: Record<CartaoCentral, InfoIntegracao> = {
     beneficios: ['O app do celular continua funcionando', 'Histórico e contatos quando a Meta enviar e você autorizar', 'Mesmo limite de números do plano'],
   },
   meta_conversoes: {
-    nome: 'Meta Ads — conversões do funil',
-    resumo: 'Devolve à Meta o avanço dos leads de anúncios (qualificado, reunião, venda) para otimizar campanhas pela qualidade.',
-    unidade: ['conexão', 'conexões'],
-    beneficios: ['Campanhas otimizadas por leads que avançam no funil', 'Você escolhe quais etapas enviar', 'Painel de eventos aceitos e rejeitados'],
+    nome: 'Meta Ads — campanhas, formulários e conversões',
+    resumo:
+      'Painel das campanhas da conta de anúncios, leads dos formulários do Facebook e do Instagram no funil e devolutiva de conversões (CAPI) à Meta.',
+    // No banco, o uso desta integração conta só as conexões de conversões (CAPI); contas e Páginas vêm do resumo do Meta Ads.
+    unidade: ['conexão de conversões (CAPI)', 'conexões de conversões (CAPI)'],
+    beneficios: ['Investimento, campanhas e CPL da conta de anúncios', 'Leads dos formulários direto no funil', 'Conversões do funil devolvidas à Meta'],
   },
 }
 
@@ -136,6 +138,118 @@ export function cartoesWhatsapp(
     ultimaAtividade: lista.length ? l.ultimaAtividade : null,
   })
   return [linha('whatsapp_oficial', deModo('cloud_api')), linha('whatsapp_app', deModo('coexistencia'))]
+}
+
+// ------------------------------------------------------------------ Meta Ads: três partes, três estados
+/**
+ * O cartão do Meta Ads junta três coisas independentes, cada uma com o próprio estado:
+ * conta de anúncios (leitura de campanhas), formulários (Páginas, Lead Ads) e conversões (CAPI).
+ * O uso que o banco devolve para `meta_conversoes` conta só a CAPI; aqui entram os registros
+ * reais da empresa da sessão (conexão do Login para Empresas, contas, Páginas e dataset).
+ */
+export type ResumoMetaAds = {
+  anuncios: { contas: number; situacao: 'nao_conectado' | 'conectado' | 'ativo' | 'erro'; ultimaLeitura: string | null; erro: string | null }
+  formularios: { paginas: number; pausadas: number; ultimoLead: string | null }
+  conversoes: { situacao: 'nao_configurado' | 'configurando' | 'ativo' | 'pausado' | 'erro'; dataset: string | null; ultimoEnvio: string | null }
+}
+
+type LoginMetaAds = {
+  conexao: { situacao: string; ultimaSincronizacaoEm: string | null; ultimoErro: string | null } | null
+  contas: unknown[]
+  paginas: { status: string; ultimoLeadEm: string | null }[]
+} | null
+type CapiMetaAds = { conexaoId: string | null; situacao: string | null; datasetId: string | null; datasetNome: string | null; ultimoEnvioEm: string | null } | null
+
+const maisRecente = (...datas: (string | null)[]) =>
+  datas.filter((d): d is string => Boolean(d)).sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null
+
+export function resumoMetaAds(login: LoginMetaAds, capi: CapiMetaAds): ResumoMetaAds {
+  const c = login?.conexao ?? null
+  const contas = c ? (login?.contas.length ?? 0) : 0
+  const anuncios: ResumoMetaAds['anuncios'] = {
+    contas,
+    situacao: !c || contas === 0 ? 'nao_conectado' : c.situacao === 'erro_autorizacao' || c.ultimoErro ? 'erro' : c.ultimaSincronizacaoEm ? 'ativo' : 'conectado',
+    ultimaLeitura: c?.ultimaSincronizacaoEm ?? null,
+    erro: c?.ultimoErro ?? (c?.situacao === 'erro_autorizacao' ? 'Autorização da Meta expirou ou foi revogada.' : null),
+  }
+  const paginas = c ? (login?.paginas ?? []) : []
+  const formularios: ResumoMetaAds['formularios'] = {
+    paginas: paginas.filter((p) => p.status === 'ativa').length,
+    pausadas: paginas.filter((p) => p.status === 'pausada').length,
+    ultimoLead: maisRecente(...paginas.map((p) => p.ultimoLeadEm)),
+  }
+  const conversoes: ResumoMetaAds['conversoes'] = {
+    situacao: !capi?.conexaoId || !capi.situacao
+      ? 'nao_configurado'
+      : capi.situacao === 'ativa' ? 'ativo' : capi.situacao === 'pausada' ? 'pausado' : capi.situacao === 'erro_autorizacao' ? 'erro' : 'configurando',
+    dataset: capi?.conexaoId ? (capi.datasetNome ?? capi.datasetId) : null,
+    ultimoEnvio: capi?.ultimoEnvioEm ?? null,
+  }
+  return { anuncios, formularios, conversoes }
+}
+
+/** Linha do cartão do Meta Ads recalculada pelas três partes (estado geral, uso e última atividade). */
+export function cartaoMetaAds(l: LinhaCentral, r: ResumoMetaAds): LinhaCentral {
+  const capiLigada = r.conversoes.situacao !== 'nao_configurado'
+  return {
+    ...l,
+    emUso: r.anuncios.contas + r.formularios.paginas + (capiLigada ? 1 : 0),
+    comErro: (r.anuncios.situacao === 'erro' ? 1 : 0) + (r.conversoes.situacao === 'erro' ? 1 : 0),
+    pendentes: (r.anuncios.situacao === 'conectado' ? 1 : 0) + (r.conversoes.situacao === 'configurando' ? 1 : 0),
+    ultimaAtividade: maisRecente(r.anuncios.ultimaLeitura, r.formularios.ultimoLead, r.conversoes.ultimoEnvio, l.ultimaAtividade),
+  }
+}
+
+export type LinhaResumoMetaAds = { parte: string; texto: string; estado: { texto: string; tom: 'verde' | 'azul' | 'ambar' | 'vermelho' | 'neutro' } }
+
+/** As três linhas do cartão: o que está conectado em cada parte, sem confundir anúncios com CAPI. */
+export function linhasMetaAds(r: ResumoMetaAds, formatarData: (iso: string) => string): LinhaResumoMetaAds[] {
+  const a = r.anuncios
+  const f = r.formularios
+  const v = r.conversoes
+  const plural = (n: number, um: string, varios: string) => `${n} ${n === 1 ? um : varios}`
+  return [
+    {
+      parte: 'Conta de anúncios e campanhas',
+      texto:
+        a.contas === 0
+          ? 'Nenhuma conta de anúncios conectada'
+          : `${plural(a.contas, 'conta conectada', 'contas conectadas')} · ${a.situacao === 'erro' ? `última leitura falhou${a.erro ? `: ${a.erro}` : ''}` : a.ultimaLeitura ? `métricas lidas em ${formatarData(a.ultimaLeitura)}` : 'aguardando a primeira leitura (até 1 hora)'}`,
+      estado:
+        a.situacao === 'nao_conectado'
+          ? { texto: 'Não conectado', tom: 'neutro' }
+          : a.situacao === 'erro'
+            ? { texto: 'Com erro', tom: 'vermelho' }
+            : a.situacao === 'ativo'
+              ? { texto: 'Métricas funcionando', tom: 'verde' }
+              : { texto: 'Conectado', tom: 'azul' },
+    },
+    {
+      parte: 'Formulários do Facebook e do Instagram',
+      texto:
+        f.paginas === 0
+          ? `Nenhuma Página conectada${f.pausadas ? ` (${plural(f.pausadas, 'pausada', 'pausadas')})` : ''}`
+          : `${plural(f.paginas, 'Página conectada', 'Páginas conectadas')}${f.ultimoLead ? ` · último lead em ${formatarData(f.ultimoLead)}` : ' · nenhum lead ainda'}`,
+      estado: f.paginas === 0 ? { texto: 'Não conectado', tom: 'neutro' } : f.ultimoLead ? { texto: 'Recebendo leads', tom: 'verde' } : { texto: 'Conectado', tom: 'azul' },
+    },
+    {
+      parte: 'Conversões (CAPI)',
+      texto:
+        v.situacao === 'nao_configurado'
+          ? 'Nenhum dataset conectado'
+          : `Dataset ${v.dataset ?? ''}${v.ultimoEnvio ? ` · último envio em ${formatarData(v.ultimoEnvio)}` : ''}`.trim(),
+      estado:
+        v.situacao === 'nao_configurado'
+          ? { texto: 'Não configurado', tom: 'neutro' }
+          : v.situacao === 'ativo'
+            ? { texto: 'Enviando', tom: 'verde' }
+            : v.situacao === 'pausado'
+              ? { texto: 'Pausado', tom: 'ambar' }
+              : v.situacao === 'erro'
+                ? { texto: 'Com erro', tom: 'vermelho' }
+                : { texto: 'Falta ativar', tom: 'ambar' },
+    },
+  ]
 }
 
 export const infoDoCartao = (l: LinhaCentral) => INFO[l.cartao ?? l.integracao]

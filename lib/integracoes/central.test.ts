@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest'
 
-import { INFO, INTEGRACOES, cartoesWhatsapp, estadoDoCartao, grupoDoCartao, infoDoCartao, lerLinhasCentral, limiteAtingido, textoDaCota, textoDoLimite, type CotaEmpresa, type LinhaCentral } from './central'
+import {
+  INFO,
+  INTEGRACOES,
+  cartaoMetaAds,
+  cartoesWhatsapp,
+  estadoDoCartao,
+  grupoDoCartao,
+  infoDoCartao,
+  lerLinhasCentral,
+  limiteAtingido,
+  linhasMetaAds,
+  resumoMetaAds,
+  textoDaCota,
+  textoDoLimite,
+  type CotaEmpresa,
+  type LinhaCentral,
+} from './central'
 
 const base: LinhaCentral = {
   integracao: 'google_sheets',
@@ -115,5 +131,53 @@ describe('Central de Integrações — leitura do banco', () => {
     expect(linhas).toHaveLength(1)
     expect(linhas[0]).toMatchObject({ integracao: 'whatsapp_oficial', regra: 'liberar', limiteNumeros: null, limiteNumerosDefinido: false, usoNumeros: 1 })
     expect(lerLinhasCentral(null)).toEqual([])
+  })
+})
+
+describe('Central de Integrações — Meta Ads em três partes', () => {
+  const meta: LinhaCentral = { ...base, integracao: 'meta_conversoes', planoNome: null, limiteFontes: null, limiteFontesDefinido: true }
+  const data = (iso: string) => iso.slice(0, 16)
+  const conexao = { situacao: 'ativa', ultimaSincronizacaoEm: '2026-11-01T03:30:05Z', ultimoErro: null }
+
+  it('Rio X7: 1 conta de anúncios com métricas, 0 Páginas e 0 CAPI → cartão ativo, sem confundir com CAPI', () => {
+    const r = resumoMetaAds({ conexao, contas: [{ contaId: '1109230466869089' }], paginas: [] }, null)
+    expect(r).toEqual({
+      anuncios: { contas: 1, situacao: 'ativo', ultimaLeitura: '2026-11-01T03:30:05Z', erro: null },
+      formularios: { paginas: 0, pausadas: 0, ultimoLead: null },
+      conversoes: { situacao: 'nao_configurado', dataset: null, ultimoEnvio: null },
+    })
+    const l = cartaoMetaAds(meta, r)
+    expect(l).toMatchObject({ emUso: 1, comErro: 0, pendentes: 0, ultimaAtividade: '2026-11-01T03:30:05Z' })
+    expect(estadoDoCartao(l)).toBe('ativo')
+    expect(linhasMetaAds(r, data).map((x) => [x.parte, x.estado.texto, x.texto])).toEqual([
+      ['Conta de anúncios e campanhas', 'Métricas funcionando', '1 conta conectada · métricas lidas em 2026-11-01T03:30'],
+      ['Formulários do Facebook e do Instagram', 'Não conectado', 'Nenhuma Página conectada'],
+      ['Conversões (CAPI)', 'Não configurado', 'Nenhum dataset conectado'],
+    ])
+  })
+
+  it('nada conectado: as três partes "não conectado/configurado" e o cartão segue a regra de limite', () => {
+    const r = resumoMetaAds(null, null)
+    expect(cartaoMetaAds(meta, r)).toMatchObject({ emUso: 0, comErro: 0, pendentes: 0, ultimaAtividade: null })
+    expect(estadoDoCartao(cartaoMetaAds(meta, r))).toBe('nao_conectado')
+    expect(linhasMetaAds(r, data).map((x) => x.estado.texto)).toEqual(['Não conectado', 'Não conectado', 'Não configurado'])
+  })
+
+  it('só CAPI (dataset por MBE) não vira "conta de anúncios conectada"; erro de leitura aparece só na parte de anúncios', () => {
+    const soCapi = resumoMetaAds(null, { conexaoId: 'c1', situacao: 'configurando', datasetId: '810000000000001', datasetNome: 'CRM', ultimoEnvioEm: null })
+    expect(soCapi.anuncios.situacao).toBe('nao_conectado')
+    expect(linhasMetaAds(soCapi, data).map((x) => x.estado.texto)).toEqual(['Não conectado', 'Não conectado', 'Falta ativar'])
+    expect(cartaoMetaAds(meta, soCapi)).toMatchObject({ emUso: 1, pendentes: 1 })
+
+    const comErro = resumoMetaAds({ conexao: { situacao: 'erro_autorizacao', ultimaSincronizacaoEm: null, ultimoErro: null }, contas: [{}], paginas: [{ status: 'ativa', ultimoLeadEm: '2026-11-01T10:00:00Z' }] }, null)
+    expect(comErro.anuncios).toMatchObject({ situacao: 'erro', erro: 'Autorização da Meta expirou ou foi revogada.' })
+    expect(estadoDoCartao(cartaoMetaAds(meta, comErro))).toBe('erro')
+    expect(linhasMetaAds(comErro, data)[1]).toMatchObject({ estado: { texto: 'Recebendo leads' }, texto: '1 Página conectada · último lead em 2026-11-01T10:00' })
+  })
+
+  it('aguardando a primeira leitura: conta conectada (azul), sem fingir métricas', () => {
+    const r = resumoMetaAds({ conexao: { situacao: 'ativa', ultimaSincronizacaoEm: null, ultimoErro: null }, contas: [{}], paginas: [] }, null)
+    expect(linhasMetaAds(r, data)[0]).toMatchObject({ estado: { texto: 'Conectado' }, texto: '1 conta conectada · aguardando a primeira leitura (até 1 hora)' })
+    expect(estadoDoCartao(cartaoMetaAds(meta, r))).toBe('conectado')
   })
 })

@@ -24,6 +24,12 @@ type Chamada = { nome: string; args?: Record<string, unknown> }
 type Resp = { data: unknown; error: ErroBanco }
 type Rpcs = Record<string, (args?: Record<string, unknown>) => Resp>
 
+/** Sheets API falsa: grade da aba (pedida antes de ler as linhas); null para as outras URLs. */
+const gradeFalsa = (url: string, aba: string) =>
+  /\/spreadsheets\/[^/?]+\?/.test(url) && !url.includes('/values/')
+    ? new Response(JSON.stringify({ sheets: [{ properties: { sheetId: 0, title: aba, gridProperties: { rowCount: 1000, columnCount: 26 } } }] }))
+    : null
+
 function montar(opts: { admin?: Rpcs; usuario?: Rpcs; logado?: boolean; buscar?: (url: string, init?: RequestInit) => Response } = {}) {
   const chamadasAdmin: Chamada[] = []
   const chamadasUsuario: Chamada[] = []
@@ -327,7 +333,10 @@ describe('fila de sincronização', () => {
   it('colunas renomeadas na planilha: erro claro, nada é importado', async () => {
     const { deps, chamadasAdmin } = montar({
       admin: { sheets_reservar: () => ({ data: [reservada], error: null }), google_obter_refresh_token: () => ({ data: 'r', error: null }) },
-      buscar: (url) => (url.includes('/token') ? new Response(JSON.stringify({ access_token: 'a' })) : new Response(JSON.stringify({ values: [['Cliente', 'Celular'], ['Ana', '11999990001']] }))),
+      buscar: (url) =>
+        url.includes('/token')
+          ? new Response(JSON.stringify({ access_token: 'a' }))
+          : (gradeFalsa(url, 'Leads') ?? new Response(JSON.stringify({ values: [['Cliente', 'Celular'], ['Ana', '11999990001']] }))),
     })
     await processarFila(deps)
     expect(chamadasAdmin.map((c) => c.nome)).not.toContain('sheets_processar_linhas')
@@ -344,7 +353,7 @@ describe('fila de sincronização', () => {
       buscar: (url) =>
         url.includes('/token')
           ? new Response(JSON.stringify({ access_token: 'a' }))
-          : new Response(JSON.stringify({ values: [['Nome', 'Telefone'], ['Ana', '11999990001'], ['Bia', '11999990002']] })),
+          : (gradeFalsa(url, 'Leads') ?? new Response(JSON.stringify({ values: [['Nome', 'Telefone'], ['Ana', '11999990001'], ['Bia', '11999990002']] }))),
     })
     const resumo = await processarFila(deps)
     expect(resumo[0]).toMatchObject({ ok: true, linhas: 2, importada: 2 })
@@ -482,7 +491,7 @@ describe('avisos do Google Drive (quase em tempo real)', () => {
         sheets_processar_linhas: () => ({ data: { importadas: 0 }, error: null }),
         sheets_tem_pendencia: () => ({ data: true, error: null }),
       },
-      buscar: (url) => acesso(url) ?? new Response(JSON.stringify({ values: [['Telefone']] }), { status: 200 }),
+      buscar: (url) => acesso(url) ?? gradeFalsa(url, 'A') ?? new Response(JSON.stringify({ values: [['Telefone']] }), { status: 200 }),
     })
     const resumo = await processarFila(deps, { limite: 1 })
     expect(resumo).toHaveLength(3) // 1ª leitura + 2 repetições, mesmo com aviso sempre pendente

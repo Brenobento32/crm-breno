@@ -101,9 +101,40 @@ describe('Sheets API', () => {
     const meta = await lerMetadados(buscar, cfg, 't', ID)
     expect(meta).toEqual({ titulo: 'Leads', abas: [{ id: 0, titulo: "Página 1's", linhas: 10, colunas: 3 }] })
     const r = await lerLinhas(buscar, cfg, 't', ID, "Página 1's", 2, 100)
-    expect(decodeURIComponent(pedidas[1])).toContain("'Página 1''s'!A2:AZ102")
+    // Faixa limitada à grade real da aba (10 linhas × 3 colunas): o Google recusa faixa maior com 400.
+    expect(decodeURIComponent(pedidas[2])).toContain("'Página 1''s'!A2:C10")
     expect(r.cabecalho).toEqual(['Nome', 'Telefone'])
     expect(r.linhas.map((l) => l.numero)).toEqual([3, 4, 5])
+  })
+
+  it('aba com espaço no nome, grade grande e aba inexistente', async () => {
+    const pedidas: string[] = []
+    const buscar = async (url: string) => {
+      pedidas.push(decodeURIComponent(url))
+      if (url.includes('/values/')) return resposta(200, { values: [['Nome', 'E-mail']] })
+      return resposta(200, {
+        sheets: [
+          { properties: { sheetId: 7, title: ' Leads Meta ', gridProperties: { rowCount: 5000, columnCount: 80 } } },
+          { properties: { sheetId: 8, title: 'Outra', gridProperties: { rowCount: 3, columnCount: 2 } } },
+        ],
+      })
+    }
+    // A tela e o banco guardam o nome sem os espaços das pontas: a faixa usa o nome REAL da aba.
+    await lerLinhas(buscar, cfg, 't', ID, 'Leads Meta', 1, 100)
+    expect(pedidas[1]).toContain("' Leads Meta '!A1:AZ101")
+    // Cabeçalho além da grade: nada a ler (sem pedir faixa inválida ao Google).
+    expect(await lerLinhas(buscar, cfg, 't', ID, 'Outra', 4, 100)).toEqual({ cabecalho: [], linhas: [] })
+    const e = await lerLinhas(buscar, cfg, 't', ID, 'Sumiu', 1, 10).catch((x) => x)
+    expect(e).toBeInstanceOf(ErroGoogle)
+    expect(e.tipo).toBe('invalido')
+  })
+
+  it('400 do Google: a mensagem dele aparece (sem token), para diagnosticar', async () => {
+    const buscar = async () => resposta(400, { error: { code: 400, message: "Unable to parse range: 'X'!A1:AZ6" } })
+    const e = await lerMetadados(buscar, cfg, 'token-secreto', ID).catch((x) => x)
+    expect(e).toBeInstanceOf(ErroGoogle)
+    expect(e.message).toBe("O Google Sheets respondeu 400: Unable to parse range: 'X'!A1:AZ6")
+    expect(e.message).not.toContain('token-secreto')
   })
 })
 

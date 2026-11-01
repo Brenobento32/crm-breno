@@ -149,7 +149,18 @@ async function chamarSheets(buscar: Busca, url: string, accessToken: string): Pr
     throw new ErroGoogle('sem_acesso', 'O AVANTE ainda não tem acesso a esta planilha. Autorize o arquivo no seletor do Google.')
   }
   if (r.status === 429) throw new ErroGoogle('cota', 'Limite de uso do Google atingido. Tentaremos de novo mais tarde.')
-  if (!r.ok) throw new ErroGoogle('rede', `O Google Sheets respondeu ${r.status}.`)
+  if (!r.ok) {
+    // A mensagem do Google (ex.: faixa inválida) vai para o log e para o Administrador; nunca token nem conteúdo de linha.
+    let detalhe = ''
+    try {
+      const c = (await r.json()) as { error?: { message?: unknown } }
+      detalhe = typeof c?.error?.message === 'string' ? c.error.message.slice(0, 200) : ''
+    } catch {
+      detalhe = ''
+    }
+    console.error('google sheets:', r.status, detalhe)
+    throw new ErroGoogle('rede', `O Google Sheets respondeu ${r.status}${detalhe ? `: ${detalhe}` : '.'}`)
+  }
   return lerJson(r)
 }
 
@@ -175,8 +186,42 @@ export async function lerMetadados(
 }
 
 /** Faixa A1 de uma aba com aspas (nomes com espaço ou acento). */
-function faixa(aba: string, inicio: number, fim: number): string {
-  return `'${aba.replaceAll("'", "''")}'!A${inicio}:AZ${fim}`
+function faixa(aba: string, inicio: number, fim: number, colunaFinal = 'AZ'): string {
+  return `'${aba.replaceAll("'", "''")}'!A${inicio}:${colunaFinal}${fim}`
+}
+
+/** Letra(s) da coluna em A1: 1 → A, 26 → Z, 52 → AZ. */
+function letraDaColuna(n: number): string {
+  let s = ''
+  for (let x = n; x > 0; x = Math.floor((x - 1) / 26)) s = String.fromCharCode(65 + ((x - 1) % 26)) + s
+  return s
+}
+
+/** Até quantas colunas o AVANTE lê por aba (AZ). */
+const MAX_COLUNAS = 52
+
+/**
+ * Nome exato e grade real da aba. O Google responde 400 quando a faixa passa da grade
+ * (abas criadas por integrações ou CSV têm só as linhas/colunas usadas) ou quando o nome
+ * não confere (ex.: espaço no começo/fim do nome, que formulários e telas costumam cortar).
+ */
+async function gradeDaAba(
+  buscar: Busca,
+  cfg: ConfigGoogle,
+  accessToken: string,
+  planilhaId: string,
+  aba: string,
+): Promise<{ titulo: string; linhas: number | null; colunas: number | null }> {
+  const campos = encodeURIComponent('sheets.properties(sheetId,title,gridProperties(rowCount,columnCount))')
+  const c = await chamarSheets(buscar, `${cfg.sheetsUrl}/spreadsheets/${encodeURIComponent(planilhaId)}?fields=${campos}`, accessToken)
+  const abas = ((c.sheets as unknown[]) ?? []).flatMap((s) => {
+    const p = (s as { properties?: { title?: string; gridProperties?: { rowCount?: number; columnCount?: number } } }).properties
+    return p && typeof p.title === 'string' ? [p] : []
+  })
+  const alvo = abas.find((p) => p.title === aba) ?? abas.find((p) => p.title!.trim() === aba.trim())
+  if (!alvo) throw new ErroGoogle('invalido', `A aba "${aba}" não foi encontrada nesta planilha (foi renomeada ou excluída?).`)
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null)
+  return { titulo: alvo.title!, linhas: n(alvo.gridProperties?.rowCount), colunas: n(alvo.gridProperties?.columnCount) }
 }
 
 export async function lerLinhas(
@@ -188,9 +233,13 @@ export async function lerLinhas(
   linhaCabecalho: number,
   maxLinhas: number,
 ): Promise<{ cabecalho: string[]; linhas: { numero: number; valores: string[] }[] }> {
-  const ate = linhaCabecalho + Math.max(1, Math.min(maxLinhas, 5000))
+  const grade = await gradeDaAba(buscar, cfg, accessToken, planilhaId, aba)
+  if (grade.linhas !== null && linhaCabecalho > grade.linhas) return { cabecalho: [], linhas: [] }
+  // Nunca pede além da grade real da aba (linhas e colunas): o Google recusaria com 400.
+  const ate = Math.min(linhaCabecalho + Math.max(1, Math.min(maxLinhas, 5000)), grade.linhas ?? Number.MAX_SAFE_INTEGER)
+  const colunaFinal = letraDaColuna(Math.min(MAX_COLUNAS, grade.colunas ?? MAX_COLUNAS))
   const url =
-    `${cfg.sheetsUrl}/spreadsheets/${encodeURIComponent(planilhaId)}/values/${encodeURIComponent(faixa(aba, linhaCabecalho, ate))}` +
+    `${cfg.sheetsUrl}/spreadsheets/${encodeURIComponent(planilhaId)}/values/${encodeURIComponent(faixa(grade.titulo, linhaCabecalho, ate, colunaFinal))}` +
     '?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE'
   const c = await chamarSheets(buscar, url, accessToken)
   const valores = ((c.values as unknown[][]) ?? []).map((l) => (l ?? []).map((v) => (v == null ? '' : String(v))))

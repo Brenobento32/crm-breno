@@ -153,3 +153,25 @@ O AVANTE **nunca** cria, edita, pausa campanhas nem gera gasto.
    lead de formulário de teste (Ferramenta de teste de anúncios de cadastro), métricas e evento
    CAPI com código de teste.
 5. Acumular as 500 chamadas pelo uso real, gravar os vídeos e enviar o App Review; app em Live.
+
+## Situação em 01/11/2026
+
+- Passos 2 e 3 concluídos (Pacote 6 publicado; `META_ADS_CONFIG_ID` cadastrado). A homologação saiu
+  da Teste A e foi para a **Rio X7 Agência Digital** (`rio-x7`, interna): conta de anúncios **Rio X7**
+  (`act_1109230466869089`) da **BM Bento** (938379700973334) conectada só para leitura; métricas
+  chegando. Sem Página, sem dataset, sem CAPI. Webhook Page › leadgen ainda não registrado.
+- Correção local, ainda não publicada: o cartão da Central passa a mostrar conta de anúncios,
+  formulários e conversões (CAPI) separadamente (`lib/integracoes/central.ts`, página da Central).
+  Entra no próximo pacote controlado.
+
+## Próximas etapas registradas (NÃO executar sem nova autorização)
+
+1. **Formulários do Facebook e do Instagram direto no funil** (Lead Ads oficial): conectar a Página
+   "Rio X7 Agência Digital" (272993359821382, do portfólio "riox7", compartilhada com a BM Bento),
+   registrar o webhook Page › leadgen, conferir o "Acesso a leads" do portfólio dono da Página e
+   publicar o app (leads reais só chegam com o app em Live + App Review).
+2. **Leads de anúncios para WhatsApp** (Click-to-WhatsApp) pela Cloud API oficial, com a origem do
+   anúncio guardada no lead (liberação do WhatsApp oficial por empresa).
+3. **Campanha de origem e devolutivas** (qualificação/venda) pela Conversions API, com dataset
+   autorizado pela BM Bento e mapeamento das etapas do funil; validar antes com código de teste se a
+   Meta exige `ads_management`.

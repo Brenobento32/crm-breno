@@ -22,18 +22,23 @@ import {
   podeAdministrarIntegracoes,
   sincronizacoesWhatsapp,
 } from '@/lib/dal/integracoes-oficiais'
+import { metaAdsDaEmpresa } from '@/lib/dal/meta-ads'
 import { conexaoMetaAds, franquiaWhatsapp } from '@/lib/dal/meta-conversoes'
 import { itemDoTipo, situacaoDaFonte } from '@/lib/integracoes/catalogo'
 import {
   ROTULO_ESTADO,
+  cartaoMetaAds,
   cartoesWhatsapp,
   estadoDoCartao,
   infoDoCartao,
   grupoDoCartao,
+  linhasMetaAds,
+  resumoMetaAds,
   textoDeUso,
   textoDoLimite,
   type CartaoCentral,
   type LinhaCentral,
+  type ResumoMetaAds,
 } from '@/lib/integracoes/central'
 import { formatarDataHoraCompleta } from '@/lib/utils/formatacao'
 
@@ -62,7 +67,7 @@ export default async function IntegracoesPage({ searchParams }: { searchParams: 
   const eu = await getUsuarioAtual()
   if (eu.role !== 'gerente') notFound()
 
-  const [central, todasFontes, podeGerir, opcoes, responsaveis, params, oficiais, contas, consumo, podeConectar, franquia, metaAds, habilitadas, monitoramento, sincronizacoes] =
+  const [central, todasFontes, podeGerir, opcoes, responsaveis, params, oficiais, contas, consumo, podeConectar, franquia, metaAds, habilitadas, monitoramento, sincronizacoes, loginAds] =
     await Promise.all([
       centralDaEmpresa(),
       listarFontes(),
@@ -79,6 +84,7 @@ export default async function IntegracoesPage({ searchParams }: { searchParams: 
       integracoesHabilitadas(),
       monitoramentoDasPlanilhas(),
       sincronizacoesWhatsapp(),
+      metaAdsDaEmpresa(),
     ])
   const erro = typeof params.erro === 'string' ? params.erro : null
   const ok = typeof params.ok === 'string' ? params.ok : null
@@ -90,7 +96,11 @@ export default async function IntegracoesPage({ searchParams }: { searchParams: 
   const numerosWhatsapp = oficiais
     .filter((o) => o.tipo === 'whatsapp_cloud')
     .map((o) => ({ modo: o.modo ?? ('cloud_api' as const), situacao: o.situacao, comErro: Boolean(o.bloqueadoPorCobranca || (o.ultimoErro && o.situacao !== 'conectado')) }))
-  const cartoes = central.flatMap((l) => (l.integracao === 'whatsapp_oficial' ? cartoesWhatsapp(l, numerosWhatsapp) : [l]))
+  // Meta Ads: conta de anúncios, Páginas (formulários) e CAPI, cada uma com o próprio estado (registros reais da empresa).
+  const resumoAds = resumoMetaAds(loginAds, metaAds)
+  const cartoes = central.flatMap((l) =>
+    l.integracao === 'whatsapp_oficial' ? cartoesWhatsapp(l, numerosWhatsapp) : l.integracao === 'meta_conversoes' ? [cartaoMetaAds(l, resumoAds)] : [l],
+  )
   const liberadas = cartoes.filter((l) => grupoDoCartao(l) === 'liberada')
   const upgrade = cartoes.filter((l) => grupoDoCartao(l) === 'upgrade')
   const emBreve = cartoes.filter((l) => grupoDoCartao(l) === 'em_breve')
@@ -194,7 +204,12 @@ export default async function IntegracoesPage({ searchParams }: { searchParams: 
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {liberadas.map((l) => (
-              <CartaoIntegracao key={l.cartao ?? l.integracao} chave={l.cartao ?? l.integracao} titulo={infoDoCartao(l).nome} cabecalho={<CabecalhoCartao l={l} />}>
+              <CartaoIntegracao
+                key={l.cartao ?? l.integracao}
+                chave={l.cartao ?? l.integracao}
+                titulo={infoDoCartao(l).nome}
+                cabecalho={<CabecalhoCartao l={l} metaAds={l.integracao === 'meta_conversoes' ? resumoAds : undefined} />}
+              >
                 {painel[l.cartao ?? l.integracao]}
               </CartaoIntegracao>
             ))}
@@ -230,8 +245,9 @@ export default async function IntegracoesPage({ searchParams }: { searchParams: 
   )
 }
 
-function CabecalhoCartao({ l }: { l: LinhaCentral }) {
+function CabecalhoCartao({ l, metaAds }: { l: LinhaCentral; metaAds?: ResumoMetaAds }) {
   const estado = ROTULO_ESTADO[estadoDoCartao(l)]
+  const partes = metaAds ? linhasMetaAds(metaAds, formatarDataHoraCompleta) : null
   return (
     <span className="block space-y-2">
       <span className="flex items-start gap-3">
@@ -244,8 +260,21 @@ function CabecalhoCartao({ l }: { l: LinhaCentral }) {
           <span className="mt-1 block text-sm text-premium-secundario">{infoDoCartao(l).resumo}</span>
         </span>
       </span>
+      {partes && (
+        <span className="block space-y-1.5 rounded-lg border border-premium-borda-suave p-2.5">
+          {partes.map((p) => (
+            <span key={p.parte} className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="min-w-0">
+                <span className="font-medium text-premium-texto">{p.parte}</span>
+                <span className="block text-premium-mudo">{p.texto}</span>
+              </span>
+              <Selo tom={p.estado.tom}>{p.estado.texto}</Selo>
+            </span>
+          ))}
+        </span>
+      )}
       <span className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-premium-mudo">
-        <span>{textoDeUso(l)}</span>
+        {!partes && <span>{textoDeUso(l)}</span>}
         <span>Última atividade: {l.ultimaAtividade ? formatarDataHoraCompleta(l.ultimaAtividade) : '—'}</span>
         {l.regra === 'liberar' && <span>Liberada pela Rio X7</span>}
       </span>
